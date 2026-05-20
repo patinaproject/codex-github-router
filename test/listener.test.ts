@@ -58,10 +58,29 @@ test("rejects unsupported GitHub event types", async () => {
   const address = await listen(server);
   try {
     const response = await postJson(address, body, {
-      "x-github-event": "ping",
+      "x-github-event": "fork",
     });
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { ok: false, error: { code: "unsupported_event" } });
+  } finally {
+    server.close();
+  }
+});
+
+test("accepts GitHub ping health-check events", async () => {
+  const body = "{}";
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "ping",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "ping", deliveryId: "delivery-1" });
   } finally {
     server.close();
   }

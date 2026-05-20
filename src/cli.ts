@@ -181,6 +181,9 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
     context.stdout.write(`${colorize("local", "dim", { env: context.env, stream: context.stdout })}  ${localUrl}\n`);
     context.stdout.write(`${colorize("public", "dim", { env: context.env, stream: context.stdout })} ${publicWebhookUrl}\n`);
+    for (const hookUrl of hookSettingsUrls(nextConfig)) {
+      context.stdout.write(`${colorize("hook", "dim", { env: context.env, stream: context.stdout })}   ${hookUrl}\n`);
+    }
     if (attachedToExistingTunnel) {
       context.stdout.write(`${colorize("tunnel", "dim", { env: context.env, stream: context.stdout })} attached to existing ngrok tunnel\n`);
     }
@@ -300,6 +303,35 @@ function closeServer(server: ReturnType<typeof createWebhookServer>): Promise<vo
       resolve();
     });
   });
+}
+
+function hookSettingsUrls(config: RouterConfig): string[] {
+  return [
+    ...(config.organizations ?? []).flatMap((target) => {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        return [];
+      }
+      const record = target as Record<string, unknown>;
+      if (typeof record.login !== "string" || !isHookId(record.hookId)) {
+        return [];
+      }
+      return [`https://github.com/organizations/${record.login}/settings/hooks/${record.hookId}`];
+    }),
+    ...(config.repositories ?? []).flatMap((target) => {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        return [];
+      }
+      const record = target as Record<string, unknown>;
+      if (typeof record.fullName !== "string" || !isHookId(record.hookId)) {
+        return [];
+      }
+      return [`https://github.com/${record.fullName}/settings/hooks/${record.hookId}`];
+    }),
+  ];
+}
+
+function isHookId(value: unknown): value is number | string {
+  return typeof value === "number" || typeof value === "string";
 }
 
 function isNgrokEndpointConflict(error: unknown): boolean {
