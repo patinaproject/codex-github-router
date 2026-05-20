@@ -6,19 +6,27 @@ import type { SetupTarget } from "../src/setup.js";
 
 type Cancelled = "cancelled";
 type SettingsChoice = "repositories" | "organizations" | "finish";
+type TargetChoice = string | "back";
+type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "back";
 
 function createTestSetupPrompts({
   repositories = [],
   organizations = [],
   settings = ["finish"],
+  targets = [],
+  targetSettings = [],
   events,
 }: {
   repositories?: SetupTarget[] | Cancelled;
   organizations?: SetupTarget[] | Cancelled;
   settings?: Array<SettingsChoice | Cancelled>;
+  targets?: Array<TargetChoice | Cancelled>;
+  targetSettings?: Array<TargetSettingChoice | Cancelled>;
   events: string[];
 }) {
   const settingsQueue = [...settings];
+  const targetQueue = [...targets];
+  const targetSettingsQueue = [...targetSettings];
   return {
     intro(message: string) {
       events.push(`intro:${message}`);
@@ -30,6 +38,16 @@ function createTestSetupPrompts({
     async selectSettings() {
       const next = settingsQueue.shift() ?? "finish";
       events.push(`select:${next}`);
+      return next;
+    },
+    async selectTarget({ title }: { title: string }) {
+      const next = targetQueue.shift() ?? "back";
+      events.push(`target:${title}:${next}`);
+      return next;
+    },
+    async selectTargetSetting({ title }: { title: string }) {
+      const next = targetSettingsQueue.shift() ?? "back";
+      events.push(`target-setting:${title}:${next}`);
       return next;
     },
     note({ title, message }: { title: string; message: string }) {
@@ -52,7 +70,9 @@ test("interactive setup selects repositories and organizations with Clack prompt
   const prompts = createTestSetupPrompts({
     repositories: [{ id: "owner/one", label: "owner/one" }],
     organizations: [{ id: "owner", label: "owner" }],
-    settings: ["repositories", "organizations", "finish"],
+    settings: ["organizations", "repositories", "finish"],
+    targets: ["owner", "back", "owner/one", "back"],
+    targetSettings: ["toggle-issue-automation", "back", "toggle-enabled", "back"],
     events,
   });
 
@@ -74,30 +94,33 @@ test("interactive setup selects repositories and organizations with Clack prompt
   });
 
   assert.deepEqual(result, {
-    repositories: [{ fullName: "owner/one", enabled: true, issueAutomationEnabled: false }],
-    organizations: [{ login: "owner", enabled: true, issueAutomationEnabled: false }],
+    repositories: [{ fullName: "owner/one", enabled: false, issueAutomationEnabled: false }],
+    organizations: [{ login: "owner", enabled: true, issueAutomationEnabled: true }],
     setupRequired: false,
   });
   assert.deepEqual(events, [
     `intro:
-   ____  ___  ____  ____  _  _        ____  __  ____  _  _  _  _  ____
-  / ___)/ __)(    \\(  __)( \\/ )      / ___)(  )(_  _)/ )( \\( \\/ )(  _ \\
- ( (__ ( (__  ) D ( ) _)  )  / _____( (_ \\  )(   )(  ) __ ( )  /  ) _ (
-  \\___) \\___)(____/(____)(_/\\_)(_____)\\___/ (__) (__) \\_)(_/(_/\\_)(____/
+C Y B E R P U N K   P R   R O U T I N G   C O N S O L E
 
-      ____   __   _  _  ____  ____  ____
-     (  _ \\ /  \\ / )( \\(_  _)(  __)(  _ \\
-      )   /(  O )) \\/ (  )(   ) _)  )   /
-     (__\\_) \\__/ \\____/ (__) (____)(__\\_)
+   _____  _____  ____  _____  __  __        _____  __  _____  __  __  __  __  ____
+  / ___/ / __  / / __ \\ / ___/ \\ \\/ /       / ___/ / / /_  _/ / / / / \\ \\/ / / __ \\
+ / /__  / /_/ / / /_/ / /__    \\  /  _____ / /__  / /   / /  / /_/ /   \\  / / /_/ /
+ \\___/  \\____/  \\____/ \\___/   /_/\\_\\_____\\\\___/ /_/   /_/   \\____/   /_/\\_\\ \\____/
 
-             Codex-GitHub-Router // night shift
+        C O D E X - G I T H U B - R O U T E R
 `,
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
-    "select:repositories",
-    "note:Repository-level settings:Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n- owner/one",
     "select:organizations",
-    "note:Organization-level settings:Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n- owner",
+    "target:Organization-level settings:owner",
+    "target-setting:owner:toggle-issue-automation",
+    "target-setting:owner:back",
+    "target:Organization-level settings:back",
+    "select:repositories",
+    "target:Repository-level settings:owner/one",
+    "target-setting:owner/one:toggle-enabled",
+    "target-setting:owner/one:back",
+    "target:Repository-level settings:back",
     "select:finish",
     "outro:Setup saved. Starting router...",
   ]);

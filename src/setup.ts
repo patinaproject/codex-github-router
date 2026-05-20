@@ -6,17 +6,14 @@ import type { RuntimeContext } from "./types.js";
 const execFileAsync = promisify(execFile);
 const CANCELLED = "cancelled";
 const SETUP_TITLE = String.raw`
-   ____  ___  ____  ____  _  _        ____  __  ____  _  _  _  _  ____
-  / ___)/ __)(    \(  __)( \/ )      / ___)(  )(_  _)/ )( \( \/ )(  _ \
- ( (__ ( (__  ) D ( ) _)  )  / _____( (_ \  )(   )(  ) __ ( )  /  ) _ (
-  \___) \___)(____/(____)(_/\_)(_____)\___/ (__) (__) \_)(_/(_/\_)(____/
+C Y B E R P U N K   P R   R O U T I N G   C O N S O L E
 
-      ____   __   _  _  ____  ____  ____
-     (  _ \ /  \ / )( \(_  _)(  __)(  _ \
-      )   /(  O )) \/ (  )(   ) _)  )   /
-     (__\_) \__/ \____/ (__) (____)(__\_)
+   _____  _____  ____  _____  __  __        _____  __  _____  __  __  __  __  ____
+  / ___/ / __  / / __ \ / ___/ \ \/ /       / ___/ / / /_  _/ / / / / \ \/ / / __ \
+ / /__  / /_/ / / /_/ / /__    \  /  _____ / /__  / /   / /  / /_/ /   \  / / /_/ /
+ \___/  \____/  \____/ \___/   /_/\_\_____\\___/ /_/   /_/   \____/   /_/\_\ \____/
 
-             Codex-GitHub-Router // night shift
+        C O D E X - G I T H U B - R O U T E R
 `;
 
 export interface SetupTarget {
@@ -37,12 +34,17 @@ export interface SetupTargets {
 
 type SetupContext = Pick<RuntimeContext, "stdin" | "stdout" | "stderr" | "env">;
 type Cancelled = typeof CANCELLED;
-type SettingsChoice = "repositories" | "organizations" | "finish";
+type SettingsChoice = "organizations" | "repositories" | "finish";
+type TargetChoice = string | "back";
+type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "back";
+type ConfiguredTarget = SetupTarget & { enabled: boolean; issueAutomationEnabled: boolean };
 
 interface SetupPromptAdapter {
   intro(message: string, context: SetupContext): void;
   multiselectTargets(args: { message: string; items: SetupTarget[]; context: SetupContext }): Promise<SetupTarget[] | Cancelled>;
   selectSettings(args: { context: SetupContext }): Promise<SettingsChoice | Cancelled>;
+  selectTarget(args: { title: string; targets: ConfiguredTarget[]; context: SetupContext }): Promise<TargetChoice | Cancelled>;
+  selectTargetSetting(args: { title: string; target: ConfiguredTarget; context: SetupContext }): Promise<TargetSettingChoice | Cancelled>;
   note(args: { title: string; message: string; context: SetupContext }): void;
   outro(message: string, context: SetupContext): void;
   cancel(message: string, context: SetupContext): void;
@@ -102,9 +104,11 @@ export async function runInteractiveSetup({
     return cancelSetup(prompts, context);
   }
 
+  const configuredOrganizations = configureTargets(selectedOrganizations);
+  const configuredRepositories = configureTargets(selectedRepositories);
   const completed = await settingsMenu({
-    repositories: selectedRepositories,
-    organizations: selectedOrganizations,
+    repositories: configuredRepositories,
+    organizations: configuredOrganizations,
     context,
     prompts,
   });
@@ -114,18 +118,26 @@ export async function runInteractiveSetup({
   prompts.outro("Setup saved. Starting router...", context);
 
   return {
-    repositories: selectedRepositories.map((target) => ({
+    repositories: configuredRepositories.map((target) => ({
       fullName: target.id,
-      enabled: true,
-      issueAutomationEnabled: false,
+      enabled: target.enabled,
+      issueAutomationEnabled: target.issueAutomationEnabled,
     })),
-    organizations: selectedOrganizations.map((target) => ({
+    organizations: configuredOrganizations.map((target) => ({
       login: target.id,
-      enabled: true,
-      issueAutomationEnabled: false,
+      enabled: target.enabled,
+      issueAutomationEnabled: target.issueAutomationEnabled,
     })),
     setupRequired: false,
   };
+}
+
+function configureTargets(targets: SetupTarget[]): ConfiguredTarget[] {
+  return targets.map((target) => ({
+    ...target,
+    enabled: true,
+    issueAutomationEnabled: false,
+  }));
 }
 
 async function settingsMenu({
@@ -134,35 +146,79 @@ async function settingsMenu({
   context,
   prompts,
 }: {
-  repositories: SetupTarget[];
-  organizations: SetupTarget[];
+  repositories: ConfiguredTarget[];
+  organizations: ConfiguredTarget[];
   context: SetupContext;
   prompts: SetupPromptAdapter;
 }): Promise<boolean> {
   while (true) {
     const choice = await prompts.selectSettings({ context });
     if (choice === CANCELLED) return false;
-    if (choice === "repositories") {
-      prompts.note({
-        title: "Repository-level settings",
-        message: settingsSummary(repositories),
-        context,
-      });
-    } else if (choice === "organizations") {
-      prompts.note({
+    if (choice === "organizations") {
+      const completed = await targetSettingsMenu({
         title: "Organization-level settings",
-        message: settingsSummary(organizations),
+        targets: organizations,
         context,
+        prompts,
       });
+      if (!completed) return false;
+    } else if (choice === "repositories") {
+      const completed = await targetSettingsMenu({
+        title: "Repository-level settings",
+        targets: repositories,
+        context,
+        prompts,
+      });
+      if (!completed) return false;
     } else {
       return true;
     }
   }
 }
 
-function settingsSummary(targets: SetupTarget[]): string {
-  const selectedTargets = targets.length === 0 ? "No targets selected." : targets.map((target) => `- ${target.label}`).join("\n");
-  return `Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n${selectedTargets}`;
+async function targetSettingsMenu({
+  title,
+  targets,
+  context,
+  prompts,
+}: {
+  title: string;
+  targets: ConfiguredTarget[];
+  context: SetupContext;
+  prompts: SetupPromptAdapter;
+}): Promise<boolean> {
+  while (true) {
+    const targetId = await prompts.selectTarget({ title, targets, context });
+    if (targetId === CANCELLED) return false;
+    if (targetId === "back") return true;
+    const target = targets.find((candidate) => candidate.id === targetId);
+    if (!target) continue;
+    const completed = await editTargetSettings({ title: target.label, target, context, prompts });
+    if (!completed) return false;
+  }
+}
+
+async function editTargetSettings({
+  title,
+  target,
+  context,
+  prompts,
+}: {
+  title: string;
+  target: ConfiguredTarget;
+  context: SetupContext;
+  prompts: SetupPromptAdapter;
+}): Promise<boolean> {
+  while (true) {
+    const choice = await prompts.selectTargetSetting({ title, target, context });
+    if (choice === CANCELLED) return false;
+    if (choice === "back") return true;
+    if (choice === "toggle-enabled") {
+      target.enabled = !target.enabled;
+    } else if (choice === "toggle-issue-automation") {
+      target.issueAutomationEnabled = !target.issueAutomationEnabled;
+    }
+  }
 }
 
 function cancelSetup(prompts: SetupPromptAdapter, context: SetupContext): SetupSelection {
@@ -194,9 +250,52 @@ const clackPrompts: SetupPromptAdapter = {
     const choice = await select<SettingsChoice>({
       message: "Settings",
       options: [
-        { value: "repositories", label: "Repository-level settings" },
         { value: "organizations", label: "Organization-level settings" },
+        { value: "repositories", label: "Repository-level settings" },
         { value: "finish", label: "Finish setup" },
+      ],
+      input: context.stdin,
+      output: context.stdout,
+    });
+    if (isCancel(choice)) return CANCELLED;
+    return choice;
+  },
+  async selectTarget({ title, targets, context }) {
+    if (targets.length === 0) {
+      note("No targets selected.", title, { output: context.stdout });
+      return "back";
+    }
+    const choice = await select<TargetChoice>({
+      message: title,
+      options: [
+        ...targets.map((target) => ({
+          value: target.id,
+          label: target.label,
+          hint: `${target.enabled ? "webhooks on" : "webhooks off"}, issue automation ${target.issueAutomationEnabled ? "on" : "off"}`,
+        })),
+        { value: "back", label: "Back to settings" },
+      ],
+      input: context.stdin,
+      output: context.stdout,
+    });
+    if (isCancel(choice)) return CANCELLED;
+    return choice;
+  },
+  async selectTargetSetting({ title, target, context }) {
+    const choice = await select<TargetSettingChoice>({
+      message: title,
+      options: [
+        {
+          value: "toggle-enabled",
+          label: `${target.enabled ? "Disable" : "Enable"} webhooks`,
+          hint: target.enabled ? "currently enabled" : "currently disabled",
+        },
+        {
+          value: "toggle-issue-automation",
+          label: `${target.issueAutomationEnabled ? "Disable" : "Enable"} issue automation`,
+          hint: target.issueAutomationEnabled ? "currently enabled" : "currently disabled",
+        },
+        { value: "back", label: "Back to targets" },
       ],
       input: context.stdin,
       output: context.stdout,
