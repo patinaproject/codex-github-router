@@ -5,6 +5,15 @@ import type { RuntimeContext } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const CANCELLED = "cancelled";
+const SETUP_TITLE = String.raw`
+   ______          __             ____             __
+  / ____/___  ____/ /__  _  __   / __ \____  __  __/ /____  _____
+ / /   / __ \/ __  / _ \| |/_/  / /_/ / __ \/ / / / __/ _ \/ ___/
+/ /___/ /_/ / /_/ /  __/>  <   / _, _/ /_/ / /_/ / /_/  __/ /
+\____/\____/\__,_/\___/_/|_|  /_/ |_|\____/\__,_/\__/\___/_/
+
+GitHub Router // Night Shift
+`;
 
 export interface SetupTarget {
   id: string;
@@ -68,24 +77,24 @@ export async function runInteractiveSetup({
     return { repositories: [], organizations: [], setupRequired: true };
   }
 
-  prompts.intro("codex-github-router setup", context);
+  prompts.intro(SETUP_TITLE, context);
 
   const targets = await discoverTargets();
-  const selectedRepositories = await prompts.multiselectTargets({
-    message: "Select repositories for repository webhooks",
-    items: targets.repositories,
-    context,
-  });
-  if (selectedRepositories === CANCELLED) {
-    return cancelSetup(prompts, context);
-  }
-
   const selectedOrganizations = await prompts.multiselectTargets({
     message: "Select organizations for organization webhooks",
     items: targets.organizations,
     context,
   });
   if (selectedOrganizations === CANCELLED) {
+    return cancelSetup(prompts, context);
+  }
+
+  const selectedRepositories = await prompts.multiselectTargets({
+    message: "Select repositories for repository webhooks",
+    items: targets.repositories,
+    context,
+  });
+  if (selectedRepositories === CANCELLED) {
     return cancelSetup(prompts, context);
   }
 

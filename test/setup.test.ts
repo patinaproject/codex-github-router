@@ -79,9 +79,17 @@ test("interactive setup selects repositories and organizations with Clack prompt
     setupRequired: false,
   });
   assert.deepEqual(events, [
-    "intro:codex-github-router setup",
-    "multiselect:Select repositories for repository webhooks",
+    `intro:
+   ______          __             ____             __
+  / ____/___  ____/ /__  _  __   / __ \\____  __  __/ /____  _____
+ / /   / __ \\/ __  / _ \\| |/_/  / /_/ / __ \\/ / / / __/ _ \\/ ___/
+/ /___/ /_/ / /_/ /  __/>  <   / _, _/ /_/ / /_/ / /_/  __/ /
+\\____/\\____/\\__,_/\\___/_/|_|  /_/ |_|\\____/\\__,_/\\__/\\___/_/
+
+GitHub Router // Night Shift
+`,
     "multiselect:Select organizations for organization webhooks",
+    "multiselect:Select repositories for repository webhooks",
     "select:repositories",
     "note:Repository-level settings:Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n- owner/one",
     "select:organizations",
