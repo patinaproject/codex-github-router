@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "cli-creator": {
+      "source": "openai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/cli-creator/SKILL.md",
+      "computedHash": "bd8f6db9268abf0483e17215ae6a39852a8780429c54b65658780c6f94bb4f61"
+    },
+    "develop-issue": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/develop-issue/SKILL.md",
+      "computedHash": "0078788d89e45620db80ed636c12f9ec8ded52daa9880d4d0e9cda403b01ebb7"
+    },
     "diagnose": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -12,6 +24,12 @@
       "sourceType": "github",
       "skillPath": "skills/find-skills/SKILL.md",
       "computedHash": "9e1c8b3103f92fa8092568a44fe64858de7c5c9dc65ce4bea8f168080e889cfd"
+    },
+    "finish-pr": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/finish-pr/SKILL.md",
+      "computedHash": "52792e5f3b8e2096cc588552706ff4ee383149b088e70b40ce4bba0df8cbd9a6"
     },
     "grill-me": {
       "source": "mattpocock/skills",
@@ -37,11 +55,35 @@
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
       "computedHash": "ef32aea0a8fab9b365ff9e08a95f8d353e20ca21ea46ec2e73587c86dd341351"
     },
+    "install-skills": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/install-skills/SKILL.md",
+      "computedHash": "1a698a3e57251ad40e6796ddbbc2742a4fce18cd8dce33c339d42bb87251d4c3"
+    },
+    "new-branch": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/new-branch/SKILL.md",
+      "computedHash": "0c813764e11cf70535b73141411b90bbbb08d372303df4551efa7ebb3266e7d8"
+    },
     "prototype": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/prototype/SKILL.md",
       "computedHash": "e4d0c8f8cb3fc096ee99405a15491da466545cf4a3694bee5a0c9db2fa621a43"
+    },
+    "review-code": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/review-code/SKILL.md",
+      "computedHash": "fea161eda1afc77aa0ddb55285b61afe27c113c89a8ad745dcaa8607da1ae4ca"
+    },
+    "scaffold-repository": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/scaffold-repository/SKILL.md",
+      "computedHash": "4eb5cc10eda9999572fceed9c76fe139b27f1a9e53c57e2b0b8b4a04fde5c87e"
     },
     "setup-matt-pocock-skills": {
       "source": "mattpocock/skills",
@@ -72,6 +114,18 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/triage/SKILL.md",
       "computedHash": "2b6efb6da12d92551772fcc04acf331f4e0e6f7bd9d4cb23ce0b301e0b128feb"
+    },
+    "update-branch": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/update-branch/SKILL.md",
+      "computedHash": "a47831528706f686d2cc8c90e00031c559a32c5c7b4b614f729419cddd267338"
+    },
+    "using-github": {
+      "source": "patinaproject/skills",
+      "sourceType": "github",
+      "skillPath": "skills/using-github/SKILL.md",
+      "computedHash": "19c80671aff02730359b0d237f9c2623833cf48c10f9c0daa84e1b4b354a782d"
     },
     "write-a-skill": {
       "source": "mattpocock/skills",
