@@ -102,7 +102,7 @@ export async function runInteractiveSetup({
     return { repositories: [], organizations: [], setupRequired: true };
   }
 
-  prompts.intro("Commencing simulation . . .", context);
+  prompts.intro("Welcome to the night shift", context);
 
   const targets = await discoverTargets();
   let selectedOrganizations: SetupTarget[] | null = null;
@@ -153,7 +153,7 @@ export async function runInteractiveSetup({
     if (menuResult === "back") {
       continue;
     }
-    prompts.outro("Setup saved. Starting router...", context);
+    prompts.outro("Setup saved. Commencing simulation...", context);
 
     return {
       repositories: configuredRepositories.map((target) => ({

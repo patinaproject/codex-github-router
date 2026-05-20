@@ -1,4 +1,5 @@
 import { clearLocalState, readConfig, sanitizeConfig, writeConfig } from "./config.js";
+import { deliverToCodexInbox } from "./codex-inbox.js";
 import { DeliveryCache } from "./dedupe-cache.js";
 import { doctor, preflightStartup } from "./doctor.js";
 import { githubGet } from "./github-request.js";
@@ -100,7 +101,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     return 1;
   }
   let activeConfig: RouterConfig | null = existingConfig;
-  const onEvent = ({ event, deliveryId, payload }: WebhookEvent) => {
+  const onEvent = async ({ event, deliveryId, payload }: WebhookEvent) => {
     const repository = payload.repository;
     const repo =
       repository && typeof repository === "object" && "full_name" in repository && typeof repository.full_name === "string"
@@ -109,6 +110,20 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     const route = resolveRoutingTarget(activeConfig, repo);
     if (route) {
       context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; using ${route.kind} settings ${route.name}.\n`);
+      try {
+        const result = await deliverToCodexInbox({ event, deliveryId, payload, route }, {
+          cwd: context.cwd,
+          env: context.env,
+        });
+        if (result.delivered) {
+          context.stderr.write(`Delivered ${event} delivery ${deliveryId ?? "unknown"} to Codex thread ${result.threadId}.\n`);
+        } else {
+          context.stderr.write(`Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${result.reason ?? "unknown reason"}.\n`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        context.stderr.write(`Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${message}\n`);
+      }
       return;
     }
     context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; no matching router settings found.\n`);

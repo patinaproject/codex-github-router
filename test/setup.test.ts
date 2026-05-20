@@ -139,7 +139,7 @@ test("interactive setup selects repositories and organizations with Clack prompt
     setupRequired: false,
   });
   assert.deepEqual(events, [
-    "intro:Commencing simulation . . .",
+    "intro:Welcome to the night shift",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:organizations",
@@ -157,7 +157,7 @@ test("interactive setup selects repositories and organizations with Clack prompt
     "target-setting:owner/one:back",
     "target:Repository-level settings:back",
     "select:finish",
-    "outro:Setup saved. Starting router...",
+    "outro:Setup saved. Commencing simulation...",
   ]);
 });
 
@@ -196,11 +196,11 @@ test("organization-covered repositories do not create repository webhooks by def
     { fullName: "owner/two", enabled: false },
   ]);
   assert.deepEqual(events, [
-    "intro:Commencing simulation . . .",
+    "intro:Welcome to the night shift",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:finish",
-    "outro:Setup saved. Starting router...",
+    "outro:Setup saved. Commencing simulation...",
   ]);
 });
 
@@ -252,7 +252,7 @@ test("interactive setup cancellation keeps setup required", async () => {
     setupRequired: true,
   });
   assert.deepEqual(events, [
-    "intro:Commencing simulation . . .",
+    "intro:Welcome to the night shift",
     "multiselect:Select organizations for organization webhooks",
     "cancel:Setup cancelled. Run codex-github-router again to finish setup.",
   ]);
@@ -288,7 +288,7 @@ test("settings cancellation navigates back instead of cancelling setup", async (
   assert.equal(result.setupRequired, false);
   assert.equal(result.organizations[0]?.issueAutomationPrompt, "Develop this issue using TDD, open a pull request, and report verification steps.");
   assert.deepEqual(events, [
-    "intro:Commencing simulation . . .",
+    "intro:Welcome to the night shift",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:organizations",
@@ -298,7 +298,7 @@ test("settings cancellation navigates back instead of cancelling setup", async (
     "target-setting:owner:cancelled",
     "target:Organization-level settings:back",
     "select:finish",
-    "outro:Setup saved. Starting router...",
+    "outro:Setup saved. Commencing simulation...",
   ]);
 });
 
@@ -329,13 +329,13 @@ test("repository selection cancellation goes back to organization selection", as
   assert.equal(result.setupRequired, false);
   assert.deepEqual(result.organizations, []);
   assert.deepEqual(events, [
-    "intro:Commencing simulation . . .",
+    "intro:Welcome to the night shift",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:finish",
-    "outro:Setup saved. Starting router...",
+    "outro:Setup saved. Commencing simulation...",
   ]);
 });
 
@@ -366,12 +366,12 @@ test("settings menu cancellation goes back to repository selection", async () =>
   assert.equal(result.setupRequired, false);
   assert.deepEqual(result.repositories.map((repository) => repository.fullName), ["owner/one"]);
   assert.deepEqual(events, [
-    "intro:Commencing simulation . . .",
+    "intro:Welcome to the night shift",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:cancelled",
     "multiselect:Select repositories for repository webhooks",
     "select:finish",
-    "outro:Setup saved. Starting router...",
+    "outro:Setup saved. Commencing simulation...",
   ]);
 });
