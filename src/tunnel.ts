@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
 
-const NGROK_API_URL = "http://127.0.0.1:4040/api/tunnels";
+const DEFAULT_NGROK_API_PORT = 4040;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,11 +37,13 @@ function tunnelTargetsPort(tunnel: NgrokTunnel, expectedPort: number | undefined
 export async function discoverNgrokUrl({
   fetchImpl = fetch,
   expectedPort,
+  apiPort = DEFAULT_NGROK_API_PORT,
 }: {
   fetchImpl?: typeof fetch;
   expectedPort?: number;
+  apiPort?: number;
 } = {}): Promise<string> {
-  const response = await fetchImpl(NGROK_API_URL);
+  const response = await fetchImpl(`http://127.0.0.1:${apiPort}/api/tunnels`);
   if (!response.ok) {
     throw new Error(`ngrok tunnel API returned ${response.status}`);
   }
@@ -56,12 +58,18 @@ export async function discoverNgrokUrl({
   return tunnel.public_url;
 }
 
+function parseNgrokApiPort(output: string): number | undefined {
+  const match = output.match(/addr=127\.0\.0\.1:(\d+)/);
+  return match?.[1] ? Number(match[1]) : undefined;
+}
+
 export async function startNgrokTunnel({
   port,
   stderr,
   env = process.env,
   fetchImpl = fetch,
   spawnImpl = spawn,
+  apiPort = DEFAULT_NGROK_API_PORT,
   timeoutMs = 10000,
 }: {
   port: number;
@@ -69,18 +77,23 @@ export async function startNgrokTunnel({
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   spawnImpl?: typeof spawn;
+  apiPort?: number;
   timeoutMs?: number;
 }): Promise<{ publicUrl: string; process: ChildProcess }> {
-  const child = spawnImpl("ngrok", ["http", String(port), "--log=stderr"], {
+  const child = spawnImpl("ngrok", ["http", `http://127.0.0.1:${port}`, "--log=stderr"], {
     env,
     stdio: ["ignore", "ignore", "pipe"],
   });
   let spawnError: Error | undefined;
+  let ngrokApiPort = apiPort;
+  let stderrOutput = "";
   child.once("error", (error) => {
     spawnError = error;
   });
   child.stderr.on("data", (chunk) => {
-    stderr?.write(chunk);
+    const text = chunk.toString("utf8");
+    stderrOutput += text;
+    ngrokApiPort = parseNgrokApiPort(text) ?? ngrokApiPort;
   });
 
   const startedAt = Date.now();
@@ -89,10 +102,10 @@ export async function startNgrokTunnel({
       throw new Error(`Failed to start ngrok: ${spawnError.message}`);
     }
     if (child.exitCode !== null) {
-      throw new Error(`ngrok exited with code ${child.exitCode}`);
+      throw new Error(formatNgrokExitError(child.exitCode, stderrOutput));
     }
     try {
-      const publicUrl = await discoverNgrokUrl({ fetchImpl, expectedPort: port });
+      const publicUrl = await discoverNgrokUrl({ fetchImpl, expectedPort: port, apiPort: ngrokApiPort });
       return { publicUrl, process: child };
     } catch {
       await delay(250);
@@ -102,3 +115,16 @@ export async function startNgrokTunnel({
   child.kill();
   throw new Error("Timed out waiting for ngrok public URL");
 }
+
+function formatNgrokExitError(exitCode: number, stderrOutput: string): string {
+  if (stderrOutput.includes("ERR_NGROK_334")) {
+    return [
+      "ngrok endpoint is already online in another process.",
+      "Stop the existing ngrok process, run with --localhost for local replay, or pass --url <https-url> for an externally managed tunnel.",
+    ].join(" ");
+  }
+  const errorLine = stderrOutput.split("\n").find((line) => line.startsWith("ERROR:"));
+  return errorLine ? `ngrok exited with code ${exitCode}: ${errorLine.replace(/^ERROR:\s*/, "")}` : `ngrok exited with code ${exitCode}`;
+}
+
+export { parseNgrokApiPort };
