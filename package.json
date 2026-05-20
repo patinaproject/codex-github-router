@@ -1,0 +1,41 @@
+{
+  "name": "codex-github-router",
+  "private": true,
+  "type": "module",
+  "description": "Routes GitHub events to Codex",
+  "author": {
+    "name": "Ted Mader",
+    "email": "ted@patinaproject.com",
+    "url": "https://github.com/tlmader"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "commit": "git-cz",
+    "commit:retry": "git-cz --retry",
+    "commitlint": "commitlint",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\""
+  },
+  "config": {
+    "commitizen": {
+      "path": "cz-customizable"
+    },
+    "cz-customizable": {
+      "config": "commitizen.config.json"
+    }
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "commitizen": "^4.3.1",
+    "cz-customizable": "^7.5.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10",
+    "markdownlint-cli2": "^0.14.0"
+  }
+}
