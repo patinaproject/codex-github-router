@@ -1,36 +1,62 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PassThrough } from "node:stream";
-import { parseKeys, runInteractiveSetup } from "../src/setup.js";
+import { runInteractiveSetup } from "../src/setup.js";
+import type { SetupTarget } from "../src/setup.js";
 
-test("parses menu navigation keys", () => {
-  assert.deepEqual(parseKeys("\u001b[A\u001b[B jk \rQ"), ["up", "down", "space", "down", "up", "space", "enter", "q"]);
-});
+type Cancelled = "cancelled";
+type SettingsChoice = "repositories" | "organizations" | "finish";
 
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 1000) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("Timed out waiting for condition");
+function createTestSetupPrompts({
+  repositories = [],
+  organizations = [],
+  settings = ["finish"],
+  events,
+}: {
+  repositories?: SetupTarget[] | Cancelled;
+  organizations?: SetupTarget[] | Cancelled;
+  settings?: Array<SettingsChoice | Cancelled>;
+  events: string[];
+}) {
+  const settingsQueue = [...settings];
+  return {
+    intro(message: string) {
+      events.push(`intro:${message}`);
+    },
+    async multiselectTargets({ message }: { message: string }) {
+      events.push(`multiselect:${message}`);
+      return message.includes("repositories") ? repositories : organizations;
+    },
+    async selectSettings() {
+      const next = settingsQueue.shift() ?? "finish";
+      events.push(`select:${next}`);
+      return next;
+    },
+    note({ title, message }: { title: string; message: string }) {
+      events.push(`note:${title}:${message}`);
+    },
+    outro(message: string) {
+      events.push(`outro:${message}`);
+    },
+    cancel(message: string) {
+      events.push(`cancel:${message}`);
+    },
+  };
 }
 
-test("interactive setup selects repositories and organizations then visits settings sections", async () => {
+test("interactive setup selects repositories and organizations with Clack prompts", async () => {
   const stdin = new PassThrough();
   stdin.isTTY = true;
-  let rawMode: boolean | undefined;
-  stdin.setRawMode = (value: boolean) => {
-    rawMode = value;
-    return stdin;
-  };
   const stdout = new PassThrough();
-  let output = "";
-  stdout.on("data", (chunk) => {
-    output += chunk.toString("utf8");
+  const events: string[] = [];
+  const prompts = createTestSetupPrompts({
+    repositories: [{ id: "owner/one", label: "owner/one" }],
+    organizations: [{ id: "owner", label: "owner" }],
+    settings: ["repositories", "organizations", "finish"],
+    events,
   });
 
-  const setup = runInteractiveSetup({
+  const result = await runInteractiveSetup({
     context: {
       stdin,
       stdout,
@@ -44,33 +70,25 @@ test("interactive setup selects repositories and organizations then visits setti
       ],
       organizations: [{ id: "owner", label: "owner" }],
     }),
+    prompts,
   });
 
-  await waitUntil(() => output.includes("Select repositories"));
-  stdin.write(" \r");
-  await waitUntil(() => output.includes("Select organizations"));
-  stdin.write(" \r");
-  await waitUntil(() => output.includes("Settings"));
-  stdin.write("\r");
-  await waitUntil(() => output.includes("Press any key to return"));
-  stdin.write("x");
-  await waitUntil(() => output.split("Settings").length > 2);
-  stdin.write("j\r");
-  await waitUntil(() => output.includes("Organization-level settings"));
-  stdin.write("x");
-  await waitUntil(() => output.split("Settings").length > 3);
-  stdin.write("jj\r");
-  const result = await setup;
-
-  assert.equal(rawMode, false);
   assert.deepEqual(result, {
     repositories: [{ fullName: "owner/one", enabled: true, issueAutomationEnabled: false }],
     organizations: [{ login: "owner", enabled: true, issueAutomationEnabled: false }],
     setupRequired: false,
   });
-  assert.match(output, /Select repositories/);
-  assert.match(output, /Repository-level settings/);
-  assert.match(output, /Organization-level settings/);
+  assert.deepEqual(events, [
+    "intro:codex-github-router setup",
+    "multiselect:Select repositories for repository webhooks",
+    "multiselect:Select organizations for organization webhooks",
+    "select:repositories",
+    "note:Repository-level settings:Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n- owner/one",
+    "select:organizations",
+    "note:Organization-level settings:Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n- owner",
+    "select:finish",
+    "outro:Setup saved. Starting router...",
+  ]);
 });
 
 test("interactive setup reports non-TTY setup requirement", async () => {

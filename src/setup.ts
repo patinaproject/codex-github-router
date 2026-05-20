@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { colorize } from "./output.js";
+import { cancel, intro, isCancel, multiselect, note, outro, select } from "@clack/prompts";
 import type { RuntimeContext } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+const CANCELLED = "cancelled";
 
 export interface SetupTarget {
   id: string;
@@ -22,6 +23,17 @@ export interface SetupTargets {
 }
 
 type SetupContext = Pick<RuntimeContext, "stdin" | "stdout" | "stderr" | "env">;
+type Cancelled = typeof CANCELLED;
+type SettingsChoice = "repositories" | "organizations" | "finish";
+
+interface SetupPromptAdapter {
+  intro(message: string, context: SetupContext): void;
+  multiselectTargets(args: { message: string; items: SetupTarget[]; context: SetupContext }): Promise<SetupTarget[] | Cancelled>;
+  selectSettings(args: { context: SetupContext }): Promise<SettingsChoice | Cancelled>;
+  note(args: { title: string; message: string; context: SetupContext }): void;
+  outro(message: string, context: SetupContext): void;
+  cancel(message: string, context: SetupContext): void;
+}
 
 export async function discoverGitHubTargets(): Promise<SetupTargets> {
   const [repos, orgs] = await Promise.all([
@@ -45,34 +57,48 @@ export async function discoverGitHubTargets(): Promise<SetupTargets> {
 export async function runInteractiveSetup({
   context,
   discoverTargets = discoverGitHubTargets,
+  prompts = clackPrompts,
 }: {
   context: SetupContext;
   discoverTargets?: () => Promise<SetupTargets>;
+  prompts?: SetupPromptAdapter;
 }): Promise<SetupSelection> {
   if (!context.stdin.isTTY) {
     context.stdout.write("Setup requires an interactive terminal; run codex-github-router in a TTY to choose repositories and organizations.\n");
     return { repositories: [], organizations: [], setupRequired: true };
   }
 
-  context.stdout.write(`${colorize("Interactive setup", "bold", { env: context.env, stream: context.stdout })}\n`);
-  context.stdout.write("Use arrow keys or j/k to move, Space to select, Enter to continue.\n\n");
+  prompts.intro("codex-github-router setup", context);
 
   const targets = await discoverTargets();
-  const selectedRepositories = await selectMany({
-    title: "Select repositories for repository webhooks",
+  const selectedRepositories = await prompts.multiselectTargets({
+    message: "Select repositories for repository webhooks",
     items: targets.repositories,
     context,
   });
-  const selectedOrganizations = await selectMany({
-    title: "Select organizations for organization webhooks",
+  if (selectedRepositories === CANCELLED) {
+    return cancelSetup(prompts, context);
+  }
+
+  const selectedOrganizations = await prompts.multiselectTargets({
+    message: "Select organizations for organization webhooks",
     items: targets.organizations,
     context,
   });
-  await settingsMenu({
+  if (selectedOrganizations === CANCELLED) {
+    return cancelSetup(prompts, context);
+  }
+
+  const completed = await settingsMenu({
     repositories: selectedRepositories,
     organizations: selectedOrganizations,
     context,
+    prompts,
   });
+  if (!completed) {
+    return cancelSetup(prompts, context);
+  }
+  prompts.outro("Setup saved. Starting router...", context);
 
   return {
     repositories: selectedRepositories.map((target) => ({
@@ -89,164 +115,89 @@ export async function runInteractiveSetup({
   };
 }
 
-async function selectMany({
-  title,
-  items,
-  context,
-}: {
-  title: string;
-  items: SetupTarget[];
-  context: SetupContext;
-}): Promise<SetupTarget[]> {
-  if (items.length === 0) {
-    context.stdout.write(`${title}\nNo choices found.\n\n`);
-    return [];
-  }
-
-  let index = 0;
-  const selected = new Set<string>();
-  const keys = createKeyReader(context.stdin);
-  keys.open();
-  try {
-    while (true) {
-      renderSelect(context.stdout, title, items, index, selected);
-      const key = await keys.next();
-      if (key === "up") index = Math.max(0, index - 1);
-      else if (key === "down") index = Math.min(items.length - 1, index + 1);
-      else if (key === "space") {
-        const id = items[index]?.id;
-        if (id && selected.has(id)) selected.delete(id);
-        else if (id) selected.add(id);
-      } else if (key === "enter") {
-        context.stdout.write("\n");
-        return items.filter((item) => selected.has(item.id));
-      }
-    }
-  } finally {
-    keys.close();
-  }
-}
-
 async function settingsMenu({
   repositories,
   organizations,
   context,
+  prompts,
 }: {
   repositories: SetupTarget[];
   organizations: SetupTarget[];
   context: SetupContext;
-}): Promise<void> {
-  const sections = ["Repository-level settings", "Organization-level settings", "Finish setup"];
-  let index = 0;
-  const keys = createKeyReader(context.stdin);
-  keys.open();
-  try {
-    while (true) {
-      renderMenu(context.stdout, "Settings", sections, index);
-      const key = await keys.next();
-      if (key === "up") index = Math.max(0, index - 1);
-      else if (key === "down") index = Math.min(sections.length - 1, index + 1);
-      else if (key === "enter") {
-        if (index === 0) {
-          renderSettingsSection(context.stdout, "Repository-level settings", repositories);
-        } else if (index === 1) {
-          renderSettingsSection(context.stdout, "Organization-level settings", organizations);
-        } else {
-          context.stdout.write("\n");
-          return;
-        }
-        await keys.next();
-      }
-    }
-  } finally {
-    keys.close();
-  }
-}
-
-function renderSelect(stdout: SetupContext["stdout"], title: string, items: SetupTarget[], index: number, selected: Set<string>): void {
-  stdout.write(`\n${title}\n`);
-  for (const [itemIndex, item] of items.entries()) {
-    const cursor = itemIndex === index ? ">" : " ";
-    const mark = selected.has(item.id) ? "[x]" : "[ ]";
-    stdout.write(`${cursor} ${mark} ${item.label}\n`);
-  }
-}
-
-function renderMenu(stdout: SetupContext["stdout"], title: string, items: string[], index: number): void {
-  stdout.write(`\n${title}\n`);
-  for (const [itemIndex, item] of items.entries()) {
-    const cursor = itemIndex === index ? ">" : " ";
-    stdout.write(`${cursor} ${item}\n`);
-  }
-}
-
-function renderSettingsSection(stdout: SetupContext["stdout"], title: string, targets: SetupTarget[]): void {
-  stdout.write(`\n${title}\n`);
-  stdout.write("Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n");
-  if (targets.length === 0) {
-    stdout.write("No targets selected.\n");
-  } else {
-    for (const target of targets) {
-      stdout.write(`- ${target.label}\n`);
+  prompts: SetupPromptAdapter;
+}): Promise<boolean> {
+  while (true) {
+    const choice = await prompts.selectSettings({ context });
+    if (choice === CANCELLED) return false;
+    if (choice === "repositories") {
+      prompts.note({
+        title: "Repository-level settings",
+        message: settingsSummary(repositories),
+        context,
+      });
+    } else if (choice === "organizations") {
+      prompts.note({
+        title: "Organization-level settings",
+        message: settingsSummary(organizations),
+        context,
+      });
+    } else {
+      return true;
     }
   }
-  stdout.write("Press any key to return.\n");
 }
 
-function createKeyReader(stdin: SetupContext["stdin"]): {
-  open: () => void;
-  close: () => void;
-  next: () => Promise<string>;
-} {
-  const pending: string[] = [];
-  const waiters: Array<(key: string) => void> = [];
-  const previousRawMode = typeof stdin.isRaw === "boolean" ? stdin.isRaw : false;
-  const setRawMode = typeof stdin.setRawMode === "function" ? (value: boolean) => stdin.setRawMode?.(value) : undefined;
+function settingsSummary(targets: SetupTarget[]): string {
+  const selectedTargets = targets.length === 0 ? "No targets selected." : targets.map((target) => `- ${target.label}`).join("\n");
+  return `Defaults: webhooks enabled, issue automation off, label ready-for-agent.\n${selectedTargets}`;
+}
 
-  const onData = (chunk: Buffer | string): void => {
-    for (const key of parseKeys(chunk.toString("utf8"))) {
-      const waiter = waiters.shift();
-      if (waiter) waiter(key);
-      else pending.push(key);
+function cancelSetup(prompts: SetupPromptAdapter, context: SetupContext): SetupSelection {
+  prompts.cancel("Setup cancelled. Run codex-github-router again to finish setup.", context);
+  return { repositories: [], organizations: [], setupRequired: true };
+}
+
+const clackPrompts: SetupPromptAdapter = {
+  intro(message, context) {
+    intro(message, { input: context.stdin, output: context.stdout });
+  },
+  async multiselectTargets({ message, items, context }) {
+    if (items.length === 0) {
+      note("No choices found.", message, { output: context.stdout });
+      return [];
     }
-  };
-
-  return {
-    open() {
-      setRawMode?.(true);
-      stdin.resume();
-      stdin.on("data", onData);
-    },
-    close() {
-      stdin.off("data", onData);
-      setRawMode?.(previousRawMode);
-    },
-    next() {
-      const key = pending.shift();
-      if (key) return Promise.resolve(key);
-      return new Promise((resolve) => waiters.push(resolve));
-    },
-  };
-}
-
-function parseKeys(input: string): string[] {
-  const keys: string[] = [];
-  for (let index = 0; index < input.length; index += 1) {
-    const char = input[index] ?? "";
-    const next = input.slice(index, index + 3);
-    if (next === "\u001b[A") {
-      keys.push("up");
-      index += 2;
-    } else if (next === "\u001b[B") {
-      keys.push("down");
-      index += 2;
-    } else if (char === "k") keys.push("up");
-    else if (char === "j") keys.push("down");
-    else if (char === " ") keys.push("space");
-    else if (char === "\r" || char === "\n") keys.push("enter");
-    else keys.push(char.toLowerCase());
-  }
-  return keys;
-}
-
-export { parseKeys };
+    const selected = await multiselect({
+      message,
+      options: items.map((item) => ({ value: item.id, label: item.label })),
+      required: false,
+      input: context.stdin,
+      output: context.stdout,
+    });
+    if (isCancel(selected)) return CANCELLED;
+    const selectedIds = new Set(selected);
+    return items.filter((item) => selectedIds.has(item.id));
+  },
+  async selectSettings({ context }) {
+    const choice = await select<SettingsChoice>({
+      message: "Settings",
+      options: [
+        { value: "repositories", label: "Repository-level settings" },
+        { value: "organizations", label: "Organization-level settings" },
+        { value: "finish", label: "Finish setup" },
+      ],
+      input: context.stdin,
+      output: context.stdout,
+    });
+    if (isCancel(choice)) return CANCELLED;
+    return choice;
+  },
+  note({ title, message, context }) {
+    note(message, title, { output: context.stdout });
+  },
+  outro(message, context) {
+    outro(message, { output: context.stdout });
+  },
+  cancel(message, context) {
+    cancel(message, { output: context.stdout });
+  },
+};
