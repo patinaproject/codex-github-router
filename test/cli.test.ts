@@ -94,7 +94,7 @@ test("setup messaging triggers when existing config still requires setup", async
   const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
   const configHome = path.join(home, "config");
   const cacheHome = path.join(home, "cache");
-  const configDir = path.join(configHome, "codex-github-router");
+  const configDir = path.join(home, "Library", "Application Support", "codex-github-router");
   await mkdir(configDir, { recursive: true });
   await writeFile(path.join(configDir, "config.json"), JSON.stringify({ version: 1, setupRequired: true }));
   const { context, output } = createContext({
@@ -110,5 +110,5 @@ test("setup messaging triggers when existing config still requires setup", async
   });
 
   assert.equal(code, 1);
-  assert.match(output().stdout, /First run setup/);
+  assert.match(output().stdout, /Setup requires an interactive terminal/);
 });

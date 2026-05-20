@@ -9,24 +9,26 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error;
 }
 
-export function configDir({ env = process.env, platform = process.platform, homedir = os.homedir() }: PathContext = {}): string {
+export function configDir({ env = process.env, platform = process.platform, homedir }: PathContext = {}): string {
+  const home = homedir ?? env.HOME ?? os.homedir();
   if (platform === "darwin") {
-    return path.join(homedir, "Library", "Application Support", APP_NAME);
+    return path.join(home, "Library", "Application Support", APP_NAME);
   }
   if (platform === "win32") {
-    return path.join(env.APPDATA || path.join(homedir, "AppData", "Roaming"), APP_NAME);
+    return path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), APP_NAME);
   }
-  return path.join(env.XDG_CONFIG_HOME || path.join(homedir, ".config"), APP_NAME);
+  return path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), APP_NAME);
 }
 
-export function cacheDir({ env = process.env, platform = process.platform, homedir = os.homedir() }: PathContext = {}): string {
+export function cacheDir({ env = process.env, platform = process.platform, homedir }: PathContext = {}): string {
+  const home = homedir ?? env.HOME ?? os.homedir();
   if (platform === "darwin") {
-    return path.join(homedir, "Library", "Caches", APP_NAME);
+    return path.join(home, "Library", "Caches", APP_NAME);
   }
   if (platform === "win32") {
-    return path.join(env.LOCALAPPDATA || path.join(homedir, "AppData", "Local"), APP_NAME);
+    return path.join(env.LOCALAPPDATA || path.join(home, "AppData", "Local"), APP_NAME);
   }
-  return path.join(env.XDG_CACHE_HOME || path.join(homedir, ".cache"), APP_NAME);
+  return path.join(env.XDG_CACHE_HOME || path.join(home, ".cache"), APP_NAME);
 }
 
 export function configPath(context: PathContext = {}): string {

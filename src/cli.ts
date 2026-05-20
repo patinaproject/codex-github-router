@@ -6,6 +6,7 @@ import { createWebhookServer, listen } from "./listener.js";
 import { parseRouterMode } from "./mode.js";
 import { colorize, fail, ok, writeJson } from "./output.js";
 import { attachRuntimeCommands } from "./runtime-commands.js";
+import { runInteractiveSetup } from "./setup.js";
 import { findExistingNgrokTunnel, startNgrokTunnel } from "./tunnel.js";
 import { localWebhookUrl, normalizeWebhookUrl } from "./url.js";
 import type { RouterOptions } from "./mode.js";
@@ -72,6 +73,13 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   await cache.load();
   const existingConfig = await readConfig({ env: context.env });
   const firstRunSetup = mode.kind !== "localhost" && (!existingConfig || existingConfig.setupRequired);
+  const setupSelection = firstRunSetup && !options.json
+    ? await runInteractiveSetup({ context })
+    : {
+        repositories: existingConfig?.repositories ?? [],
+        organizations: existingConfig?.organizations ?? [],
+        setupRequired: Boolean(firstRunSetup),
+      };
   let server = createWebhookServer({
     mode: mode.kind,
     secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
@@ -93,11 +101,6 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     let localUrl = localWebhookUrl(address.port);
     let publicWebhookUrl = mode.kind === "url" ? mode.publicWebhookUrl : localUrl;
 
-    if (firstRunSetup && !options.json) {
-      context.stdout.write(`${colorize("First run setup", "bold", { env: context.env, stream: context.stdout })}\n`);
-      context.stdout.write(`${colorize("Using GitHub CLI auth and creating local router settings.", "cyan", { env: context.env, stream: context.stdout })}\n`);
-      context.stdout.write(`${colorize("Repository webhook creation is not configured in this build yet.", "yellow", { env: context.env, stream: context.stdout })}\n\n`);
-    }
     if (mode.kind === "localhost") {
       context.stderr.write(colorize("Localhost mode is for local replay only; GitHub.com cannot reach this listener directly.\n", "yellow", { env: context.env, stream: context.stderr }));
     }
@@ -144,10 +147,10 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       mode: mode.kind,
       localWebhookUrl: localUrl,
       publicWebhookUrl,
-      setupRequired: true,
+      setupRequired: setupSelection.setupRequired,
       attachedToExistingTunnel,
-      repositories: [],
-      organizations: [],
+      repositories: setupSelection.repositories,
+      organizations: setupSelection.organizations,
       hasStoredSecrets: false,
     }, { env: context.env });
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
