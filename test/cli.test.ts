@@ -113,4 +113,5 @@ test("setup messaging triggers when existing config still requires setup", async
   assert.equal(code, 1);
   assert.match(output().stdout, new RegExp(SETUP_TITLE.split("\n")[1] ?? "CODEX"));
   assert.match(output().stdout, /Setup requires an interactive terminal/);
+  assert.doesNotMatch(output().stdout, /codex-github-router ready/);
 });

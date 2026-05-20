@@ -136,3 +136,36 @@ test("interactive setup reports non-TTY setup requirement", async () => {
   assert.equal(result.setupRequired, true);
   assert.match(output, /interactive terminal/);
 });
+
+test("interactive setup cancellation keeps setup required", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  const events: string[] = [];
+  const result = await runInteractiveSetup({
+    context: {
+      stdin,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      env: {},
+    },
+    discoverTargets: async () => ({
+      repositories: [{ id: "owner/one", label: "owner/one" }],
+      organizations: [{ id: "owner", label: "owner" }],
+    }),
+    prompts: createTestSetupPrompts({
+      organizations: "cancelled",
+      events,
+    }),
+  });
+
+  assert.deepEqual(result, {
+    repositories: [],
+    organizations: [],
+    setupRequired: true,
+  });
+  assert.deepEqual(events, [
+    "intro:Interactive setup",
+    "multiselect:Select organizations for organization webhooks",
+    "cancel:Setup cancelled. Run codex-github-router again to finish setup.",
+  ]);
+});

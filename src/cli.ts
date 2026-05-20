@@ -84,6 +84,9 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
         organizations: existingConfig?.organizations ?? [],
         setupRequired: Boolean(firstRunSetup),
       };
+  if (firstRunSetup && !options.json && setupSelection.setupRequired) {
+    return 1;
+  }
   let server = createWebhookServer({
     mode: mode.kind,
     secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
