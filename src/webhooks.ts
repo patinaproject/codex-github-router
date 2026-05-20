@@ -134,8 +134,11 @@ async function syncTargetWebhook({
       await ghApi(["-X", "PATCH", `${apiPath}/${hookId}`, ...fields]);
       return { hookId, action: "updated" };
     } catch (error) {
-      if (!isMissingHookError(error) || createMissing) {
+      if (!isMissingHookError(error)) {
         throw error;
+      }
+      if (createMissing) {
+        return createTargetWebhook({ apiPath, fields, ghApi });
       }
       return {
         warning: {
@@ -157,6 +160,18 @@ async function syncTargetWebhook({
     };
   }
 
+  return createTargetWebhook({ apiPath, fields, ghApi });
+}
+
+async function createTargetWebhook({
+  apiPath,
+  fields,
+  ghApi,
+}: {
+  apiPath: string;
+  fields: string[];
+  ghApi: GhApi;
+}): Promise<{ hookId: number | string; action: "created" }> {
   const created = parseHook(await ghApi(["-X", "POST", apiPath, ...fields]));
   if (created.id === undefined) {
     throw new Error(`GitHub did not return a hook id for ${apiPath}`);

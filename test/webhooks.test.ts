@@ -132,6 +132,32 @@ test("reload mode warns instead of recreating missing remembered hooks", async (
   assert.deepEqual(calls[0]?.slice(0, 3), ["-X", "PATCH", "/orgs/patinaproject/hooks/456"]);
 });
 
+test("startup sync recreates missing remembered hooks and stores the new hook ID", async () => {
+  const calls: string[][] = [];
+  const config: RouterConfig = {
+    organizations: [{ login: "patinaproject", enabled: true, hookId: 456 }],
+  };
+
+  const result = await syncGitHubWebhooks({
+    config,
+    publicWebhookUrl: "https://router.example.com/webhooks/github",
+    ghApi: async (args) => {
+      calls.push(args);
+      if (args[1] === "PATCH") {
+        throw new Error("404 Not Found");
+      }
+      return JSON.stringify({ id: 789 });
+    },
+  });
+
+  assert.deepEqual(result.organizations, [{ login: "patinaproject", hookId: 789, action: "created" }]);
+  assert.equal((config.organizations?.[0] as { hookId?: number }).hookId, 789);
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["-X", "PATCH", "/orgs/patinaproject/hooks/456"],
+    ["-X", "POST", "/orgs/patinaproject/hooks"],
+  ]);
+});
+
 test("skips disabled webhook targets", async () => {
   const calls: string[][] = [];
   const config: RouterConfig = {
