@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
 import { runCli } from "../src/cli.js";
+import { SETUP_TITLE } from "../src/setup.js";
 
 function createContext(env = {}) {
   const stdout = new PassThrough();
@@ -80,12 +81,12 @@ test("localhost foreground output is polished and Q quits immediately", async ()
 
   const run = runCli(["--localhost", "--port", "0"], context);
   await waitUntil(() => output().stdout.includes("[R] Reload webhooks"));
-  context.stdin.write("SQ");
+  context.stdin.write("Q");
   const code = await run;
 
   assert.equal(code, 0);
+  assert.match(output().stdout, new RegExp(SETUP_TITLE.split("\n")[1] ?? "CODEX"));
   assert.match(output().stdout, /codex-github-router ready/);
-  assert.match(output().stdout, /"mode": "localhost"/);
   assert.doesNotMatch(output().stdout, /Press Ctrl-C to quit/);
   assert.doesNotMatch(output().stdout, />/);
 });
@@ -110,5 +111,6 @@ test("setup messaging triggers when existing config still requires setup", async
   });
 
   assert.equal(code, 1);
+  assert.match(output().stdout, new RegExp(SETUP_TITLE.split("\n")[1] ?? "CODEX"));
   assert.match(output().stdout, /Setup requires an interactive terminal/);
 });

@@ -6,11 +6,12 @@ import { createWebhookServer, listen } from "./listener.js";
 import { parseRouterMode } from "./mode.js";
 import { colorize, fail, ok, writeJson } from "./output.js";
 import { attachRuntimeCommands } from "./runtime-commands.js";
-import { runInteractiveSetup } from "./setup.js";
+import { SETUP_TITLE, runInteractiveSettings, runInteractiveSetup } from "./setup.js";
 import { findExistingNgrokTunnel, startNgrokTunnel } from "./tunnel.js";
 import { localWebhookUrl, normalizeWebhookUrl } from "./url.js";
 import type { RouterOptions } from "./mode.js";
-import type { RuntimeContext } from "./types.js";
+import type { RouterConfig, RuntimeContext } from "./types.js";
+import type { SetupSelection } from "./setup.js";
 
 interface ParsedArgs {
   options: RouterOptions;
@@ -71,6 +72,9 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
 
   const cache = DeliveryCache.persistent({ env: context.env });
   await cache.load();
+  if (!options.json) {
+    context.stdout.write(`${SETUP_TITLE}\n`);
+  }
   const existingConfig = await readConfig({ env: context.env });
   const firstRunSetup = mode.kind !== "localhost" && (!existingConfig || existingConfig.setupRequired);
   const setupSelection = firstRunSetup && !options.json
@@ -177,8 +181,21 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     },
     onSettings: async () => {
       const config = await readConfig({ env: context.env });
-      const settings = sanitizeConfig(config);
-      context.stdout.write(`${settings ? JSON.stringify(settings, null, 2) : "No router settings found. Setup has not completed yet."}\n`);
+      const selection = configToSetupSelection(config);
+      if (!config || !selection) {
+        context.stdout.write("No router settings found. Setup has not completed yet.\n");
+        return;
+      }
+      const updatedSelection = await runInteractiveSettings({ context, selection });
+      if (!updatedSelection) {
+        return;
+      }
+      await writeConfig({
+        ...config,
+        repositories: updatedSelection.repositories,
+        organizations: updatedSelection.organizations,
+        setupRequired: updatedSelection.setupRequired,
+      }, { env: context.env });
     },
     onQuit: close,
   });
@@ -188,6 +205,43 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   process.once("SIGTERM", close);
   await new Promise<void>((resolve) => server.once("close", resolve));
   return 0;
+}
+
+function configToSetupSelection(config: RouterConfig | null): SetupSelection | null {
+  if (!config) {
+    return null;
+  }
+  return {
+    repositories: (config.repositories ?? []).flatMap((target) => {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        return [];
+      }
+      const record = target as Record<string, unknown>;
+      if (typeof record.fullName !== "string") {
+        return [];
+      }
+      return [{
+        fullName: record.fullName,
+        enabled: typeof record.enabled === "boolean" ? record.enabled : true,
+        issueAutomationEnabled: typeof record.issueAutomationEnabled === "boolean" ? record.issueAutomationEnabled : false,
+      }];
+    }),
+    organizations: (config.organizations ?? []).flatMap((target) => {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        return [];
+      }
+      const record = target as Record<string, unknown>;
+      if (typeof record.login !== "string") {
+        return [];
+      }
+      return [{
+        login: record.login,
+        enabled: typeof record.enabled === "boolean" ? record.enabled : true,
+        issueAutomationEnabled: typeof record.issueAutomationEnabled === "boolean" ? record.issueAutomationEnabled : false,
+      }];
+    }),
+    setupRequired: Boolean(config.setupRequired),
+  };
 }
 
 function closeServer(server: ReturnType<typeof createWebhookServer>): Promise<void> {

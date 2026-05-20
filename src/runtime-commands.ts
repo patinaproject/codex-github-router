@@ -17,11 +17,38 @@ export function attachRuntimeCommands({
     return { enabled: false, close() {} };
   }
 
-  stdout.write("[R] Reload webhooks  [S] Show settings  [Q] Quit\n");
+  stdout.write("[R] Reload webhooks  [S] Settings  [Q] Quit\n");
   const previousRawMode = typeof stdin.isRaw === "boolean" ? stdin.isRaw : false;
   const setRawMode = typeof stdin.setRawMode === "function" ? (value: boolean) => stdin.setRawMode?.(value) : undefined;
-  setRawMode?.(true);
-  stdin.resume();
+  let listening = false;
+
+  function startListening(): void {
+    if (closed || listening) {
+      return;
+    }
+    listening = true;
+    setRawMode?.(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  }
+
+  function stopListening(): void {
+    if (!listening) {
+      return;
+    }
+    listening = false;
+    stdin.off("data", onData);
+    setRawMode?.(previousRawMode);
+  }
+
+  async function runWithSuspendedHotkeys(callback: () => void | Promise<void>): Promise<void> {
+    stopListening();
+    try {
+      await callback();
+    } finally {
+      startListening();
+    }
+  }
 
   const onData = async (chunk: Buffer | string): Promise<void> => {
     const commands = chunk.toString("utf8").toLowerCase();
@@ -29,7 +56,7 @@ export function attachRuntimeCommands({
       if (command === "r") {
         await onReload();
       } else if (command === "s") {
-        await onSettings();
+        await runWithSuspendedHotkeys(onSettings);
       } else if (command === "q") {
         close();
         await onQuit();
@@ -37,15 +64,15 @@ export function attachRuntimeCommands({
       }
     }
   };
-  stdin.on("data", onData);
   let closed = false;
+  startListening();
 
   function close(): void {
     if (closed) {
       return;
     }
     closed = true;
-    stdin.off("data", onData);
+    stopListening();
     setRawMode?.(previousRawMode);
     stdin.pause();
   }

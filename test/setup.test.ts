@@ -99,16 +99,7 @@ test("interactive setup selects repositories and organizations with Clack prompt
     setupRequired: false,
   });
   assert.deepEqual(events, [
-    `intro:
-C Y B E R P U N K   P R   R O U T I N G   C O N S O L E
-
-   _____  _____  ____  _____  __  __        _____  __  _____  __  __  __  __  ____
-  / ___/ / __  / / __ \\ / ___/ \\ \\/ /       / ___/ / / /_  _/ / / / / \\ \\/ / / __ \\
- / /__  / /_/ / / /_/ / /__    \\  /  _____ / /__  / /   / /  / /_/ /   \\  / / /_/ /
- \\___/  \\____/  \\____/ \\___/   /_/\\_\\_____\\\\___/ /_/   /_/   \\____/   /_/\\_\\ \\____/
-
-        C O D E X - G I T H U B - R O U T E R
-`,
+    "intro:Interactive setup",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:organizations",

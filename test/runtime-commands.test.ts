@@ -93,6 +93,6 @@ test("does not write a readline prompt", () => {
   });
 
   runtime.close();
-  assert.match(output, /\[R\] Reload webhooks/);
+  assert.match(output, /\[R\] Reload webhooks  \[S\] Settings  \[Q\] Quit/);
   assert.doesNotMatch(output, />/);
 });

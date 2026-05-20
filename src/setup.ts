@@ -5,8 +5,8 @@ import type { RuntimeContext } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const CANCELLED = "cancelled";
-const SETUP_TITLE = String.raw`
-C Y B E R P U N K   P R   R O U T I N G   C O N S O L E
+export const SETUP_TITLE = String.raw`
+C Y B E R P U N K   G I T H U B    R O U T I N G   C O N S O L E
 
    _____  _____  ____  _____  __  __        _____  __  _____  __  __  __  __  ____
   / ___/ / __  / / __ \ / ___/ \ \/ /       / ___/ / / /_  _/ / / / / \ \/ / / __ \
@@ -42,7 +42,7 @@ type ConfiguredTarget = SetupTarget & { enabled: boolean; issueAutomationEnabled
 interface SetupPromptAdapter {
   intro(message: string, context: SetupContext): void;
   multiselectTargets(args: { message: string; items: SetupTarget[]; context: SetupContext }): Promise<SetupTarget[] | Cancelled>;
-  selectSettings(args: { context: SetupContext }): Promise<SettingsChoice | Cancelled>;
+  selectSettings(args: { context: SetupContext; finishLabel: string }): Promise<SettingsChoice | Cancelled>;
   selectTarget(args: { title: string; targets: ConfiguredTarget[]; context: SetupContext }): Promise<TargetChoice | Cancelled>;
   selectTargetSetting(args: { title: string; target: ConfiguredTarget; context: SetupContext }): Promise<TargetSettingChoice | Cancelled>;
   note(args: { title: string; message: string; context: SetupContext }): void;
@@ -83,7 +83,7 @@ export async function runInteractiveSetup({
     return { repositories: [], organizations: [], setupRequired: true };
   }
 
-  prompts.intro(SETUP_TITLE, context);
+  prompts.intro("Interactive setup", context);
 
   const targets = await discoverTargets();
   const selectedOrganizations = await prompts.multiselectTargets({
@@ -132,6 +132,61 @@ export async function runInteractiveSetup({
   };
 }
 
+export async function runInteractiveSettings({
+  context,
+  selection,
+  prompts = clackPrompts,
+}: {
+  context: SetupContext;
+  selection: SetupSelection;
+  prompts?: SetupPromptAdapter;
+}): Promise<SetupSelection | null> {
+  if (!context.stdin.isTTY) {
+    context.stdout.write("Settings require an interactive terminal.\n");
+    return null;
+  }
+
+  prompts.intro("Settings", context);
+  const configuredOrganizations = selection.organizations.map((organization) => ({
+    id: organization.login,
+    label: organization.login,
+    enabled: organization.enabled,
+    issueAutomationEnabled: organization.issueAutomationEnabled,
+  }));
+  const configuredRepositories = selection.repositories.map((repository) => ({
+    id: repository.fullName,
+    label: repository.fullName,
+    enabled: repository.enabled,
+    issueAutomationEnabled: repository.issueAutomationEnabled,
+  }));
+  const completed = await settingsMenu({
+    repositories: configuredRepositories,
+    organizations: configuredOrganizations,
+    context,
+    prompts,
+    finishLabel: "Save settings",
+  });
+  if (!completed) {
+    prompts.cancel("Settings cancelled. Existing settings were kept.", context);
+    return null;
+  }
+  prompts.outro("Settings saved.", context);
+
+  return {
+    repositories: configuredRepositories.map((target) => ({
+      fullName: target.id,
+      enabled: target.enabled,
+      issueAutomationEnabled: target.issueAutomationEnabled,
+    })),
+    organizations: configuredOrganizations.map((target) => ({
+      login: target.id,
+      enabled: target.enabled,
+      issueAutomationEnabled: target.issueAutomationEnabled,
+    })),
+    setupRequired: selection.setupRequired,
+  };
+}
+
 function configureTargets(targets: SetupTarget[]): ConfiguredTarget[] {
   return targets.map((target) => ({
     ...target,
@@ -145,14 +200,16 @@ async function settingsMenu({
   organizations,
   context,
   prompts,
+  finishLabel = "Finish setup",
 }: {
   repositories: ConfiguredTarget[];
   organizations: ConfiguredTarget[];
   context: SetupContext;
   prompts: SetupPromptAdapter;
+  finishLabel?: string;
 }): Promise<boolean> {
   while (true) {
-    const choice = await prompts.selectSettings({ context });
+    const choice = await prompts.selectSettings({ context, finishLabel });
     if (choice === CANCELLED) return false;
     if (choice === "organizations") {
       const completed = await targetSettingsMenu({
@@ -246,13 +303,13 @@ const clackPrompts: SetupPromptAdapter = {
     const selectedIds = new Set(selected);
     return items.filter((item) => selectedIds.has(item.id));
   },
-  async selectSettings({ context }) {
+  async selectSettings({ context, finishLabel }) {
     const choice = await select<SettingsChoice>({
       message: "Settings",
       options: [
         { value: "organizations", label: "Organization-level settings" },
         { value: "repositories", label: "Repository-level settings" },
-        { value: "finish", label: "Finish setup" },
+        { value: "finish", label: finishLabel },
       ],
       input: context.stdin,
       output: context.stdout,
