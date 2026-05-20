@@ -91,7 +91,7 @@ test("localhost foreground output is polished and Q quits immediately", async ()
   assert.doesNotMatch(output().stdout, /^> /m);
 });
 
-test("setup messaging triggers when existing config still requires setup", async () => {
+test("startup preflight runs before setup when existing config still requires setup", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
   const configHome = path.join(home, "config");
   const cacheHome = path.join(home, "cache");
@@ -112,6 +112,7 @@ test("setup messaging triggers when existing config still requires setup", async
 
   assert.equal(code, 1);
   assert.match(output().stdout, new RegExp(SETUP_TITLE.split("\n")[1] ?? "CODEX"));
-  assert.match(output().stdout, /Setup requires an interactive terminal/);
+  assert.match(output().stderr, /Preflight failed before changing GitHub webhooks/);
+  assert.doesNotMatch(output().stdout, /Setup requires an interactive terminal/);
   assert.doesNotMatch(output().stdout, /codex-github-router ready/);
 });

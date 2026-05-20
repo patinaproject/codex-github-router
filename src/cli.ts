@@ -1,6 +1,6 @@
 import { clearLocalState, readConfig, sanitizeConfig, writeConfig } from "./config.js";
 import { DeliveryCache } from "./dedupe-cache.js";
-import { doctor } from "./doctor.js";
+import { doctor, preflightStartup } from "./doctor.js";
 import { githubGet } from "./github-request.js";
 import { createWebhookServer, listen } from "./listener.js";
 import { parseRouterMode } from "./mode.js";
@@ -85,6 +85,9 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   const envWebhookSecret = context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET;
   const webhookSecret = envWebhookSecret ?? existingConfig?.webhookSecret ?? generateWebhookSecret();
   const firstRunSetup = mode.kind !== "localhost" && (!existingConfig || existingConfig.setupRequired);
+  if (mode.kind !== "localhost") {
+    await preflightStartup({ env: context.env, requireTunnel: mode.kind === "tunnel" });
+  }
   const setupSelection = firstRunSetup && !options.json
     ? await runInteractiveSetup({ context })
     : {
