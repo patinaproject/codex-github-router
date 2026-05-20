@@ -61,24 +61,37 @@ export async function discoverGitHubTargets(): Promise<SetupTargets> {
 
   const parsedRepos = JSON.parse(repos.stdout) as Array<{ nameWithOwner?: string }>;
   const parsedOrgs = JSON.parse(orgs.stdout) as Array<{ login?: string }>;
+  const organizations = parsedOrgs
+    .filter((org): org is { login: string } => typeof org.login === "string")
+    .map((org) => ({ id: org.login, label: org.login }));
 
   return {
     repositories: parsedRepos
       .filter((repo): repo is { nameWithOwner: string } => typeof repo.nameWithOwner === "string")
       .map((repo) => ({ id: repo.nameWithOwner, label: repo.nameWithOwner })),
-    organizations: parsedOrgs
-      .filter((org): org is { login: string } => typeof org.login === "string")
-      .map((org) => ({ id: org.login, label: org.login })),
+    organizations,
   };
+}
+
+export async function discoverOrganizationRepositories(organizations: SetupTarget[]): Promise<SetupTarget[]> {
+  const orgRepoResults = await Promise.all(
+    organizations.map((org) => execFileAsync("gh", ["repo", "list", org.id, "--limit", "100", "--json", "nameWithOwner"], { timeout: 15000 })),
+  );
+  const orgRepos = orgRepoResults.flatMap((result) => JSON.parse(result.stdout) as Array<{ nameWithOwner?: string }>);
+  return uniqueTargets(orgRepos
+    .filter((repo): repo is { nameWithOwner: string } => typeof repo.nameWithOwner === "string")
+    .map((repo) => ({ id: repo.nameWithOwner, label: repo.nameWithOwner })));
 }
 
 export async function runInteractiveSetup({
   context,
   discoverTargets = discoverGitHubTargets,
+  discoverRepositoriesForOrganizations = discoverOrganizationRepositories,
   prompts = clackPrompts,
 }: {
   context: SetupContext;
   discoverTargets?: () => Promise<SetupTargets>;
+  discoverRepositoriesForOrganizations?: (organizations: SetupTarget[]) => Promise<SetupTarget[]>;
   prompts?: SetupPromptAdapter;
 }): Promise<SetupSelection> {
   if (!context.stdin.isTTY) {
@@ -97,10 +110,14 @@ export async function runInteractiveSetup({
   if (selectedOrganizations === CANCELLED) {
     return cancelSetup(prompts, context);
   }
+  const availableRepositories = uniqueTargets([
+    ...targets.repositories,
+    ...await discoverRepositoriesForOrganizations(selectedOrganizations),
+  ]);
 
   const selectedRepositories = await prompts.multiselectTargets({
     message: "Select repositories for repository webhooks",
-    items: targets.repositories,
+    items: availableRepositories,
     context,
   });
   if (selectedRepositories === CANCELLED) {
@@ -108,7 +125,11 @@ export async function runInteractiveSetup({
   }
 
   const configuredOrganizations = configureTargets(selectedOrganizations);
-  const configuredRepositories = configureTargets(selectedRepositories);
+  const configuredRepositories = configureTargets(repositorySettingsTargets({
+    selectedRepositories,
+    selectedOrganizations,
+    availableRepositories,
+  }));
   const completed = await settingsMenu({
     repositories: configuredRepositories,
     organizations: configuredOrganizations,
@@ -210,6 +231,34 @@ function configureTargets(targets: SetupTarget[]): ConfiguredTarget[] {
     issueAutomationLabel: DEFAULT_ISSUE_AUTOMATION_LABEL,
     issueAutomationPrompt: DEFAULT_ISSUE_AUTOMATION_PROMPT,
   }));
+}
+
+function repositorySettingsTargets({
+  selectedRepositories,
+  selectedOrganizations,
+  availableRepositories,
+}: {
+  selectedRepositories: SetupTarget[];
+  selectedOrganizations: SetupTarget[];
+  availableRepositories: SetupTarget[];
+}): SetupTarget[] {
+  const organizationLogins = new Set(selectedOrganizations.map((organization) => organization.id));
+  const organizationRepositories = availableRepositories.filter((repository) => {
+    const [owner] = repository.id.split("/");
+    return owner ? organizationLogins.has(owner) : false;
+  });
+  return uniqueTargets([...selectedRepositories, ...organizationRepositories]);
+}
+
+function uniqueTargets(targets: SetupTarget[]): SetupTarget[] {
+  const seen = new Set<string>();
+  return targets.filter((target) => {
+    if (seen.has(target.id)) {
+      return false;
+    }
+    seen.add(target.id);
+    return true;
+  });
 }
 
 async function settingsMenu({

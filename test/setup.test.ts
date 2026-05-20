@@ -76,7 +76,7 @@ test("interactive setup selects repositories and organizations with Clack prompt
   const stdout = new PassThrough();
   const events: string[] = [];
   const prompts = createTestSetupPrompts({
-    repositories: [{ id: "owner/one", label: "owner/one" }],
+    repositories: [],
     organizations: [{ id: "owner", label: "owner" }],
     settings: ["organizations", "repositories", "finish"],
     targets: ["owner", "back", "owner/one", "back"],
@@ -93,23 +93,33 @@ test("interactive setup selects repositories and organizations with Clack prompt
       env: { NO_COLOR: "1" },
     },
     discoverTargets: async () => ({
-      repositories: [
-        { id: "owner/one", label: "owner/one" },
-        { id: "owner/two", label: "owner/two" },
-      ],
+      repositories: [],
       organizations: [{ id: "owner", label: "owner" }],
     }),
+    discoverRepositoriesForOrganizations: async () => [
+      { id: "owner/one", label: "owner/one" },
+      { id: "owner/two", label: "owner/two" },
+    ],
     prompts,
   });
 
   assert.deepEqual(result, {
-    repositories: [{
-      fullName: "owner/one",
-      enabled: false,
-      issueAutomationEnabled: false,
-      issueAutomationLabel: "ready-for-agent",
-      issueAutomationPrompt: "Develop this issue using TDD, open a pull request, and report verification steps.",
-    }],
+    repositories: [
+      {
+        fullName: "owner/one",
+        enabled: false,
+        issueAutomationEnabled: false,
+        issueAutomationLabel: "ready-for-agent",
+        issueAutomationPrompt: "Develop this issue using TDD, open a pull request, and report verification steps.",
+      },
+      {
+        fullName: "owner/two",
+        enabled: true,
+        issueAutomationEnabled: false,
+        issueAutomationLabel: "ready-for-agent",
+        issueAutomationPrompt: "Develop this issue using TDD, open a pull request, and report verification steps.",
+      },
+    ],
     organizations: [{
       login: "owner",
       enabled: true,
