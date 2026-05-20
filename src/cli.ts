@@ -70,6 +70,8 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
 
   const cache = DeliveryCache.persistent({ env: context.env });
   await cache.load();
+  const existingConfig = await readConfig({ env: context.env });
+  const firstRunSetup = mode.kind !== "localhost" && (!existingConfig || existingConfig.setupRequired);
   let server = createWebhookServer({
     mode: mode.kind,
     secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
@@ -91,6 +93,11 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     let localUrl = localWebhookUrl(address.port);
     let publicWebhookUrl = mode.kind === "url" ? mode.publicWebhookUrl : localUrl;
 
+    if (firstRunSetup && !options.json) {
+      context.stdout.write(`${colorize("First run setup", "bold", { env: context.env, stream: context.stdout })}\n`);
+      context.stdout.write(`${colorize("Using GitHub CLI auth and creating local router settings.", "cyan", { env: context.env, stream: context.stdout })}\n`);
+      context.stdout.write(`${colorize("Repository webhook creation is not configured in this build yet.", "yellow", { env: context.env, stream: context.stdout })}\n\n`);
+    }
     if (mode.kind === "localhost") {
       context.stderr.write(colorize("Localhost mode is for local replay only; GitHub.com cannot reach this listener directly.\n", "yellow", { env: context.env, stream: context.stderr }));
     }
@@ -144,12 +151,11 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       hasStoredSecrets: false,
     }, { env: context.env });
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
-    context.stdout.write(`local listener: ${localUrl}\n`);
-    context.stdout.write(`public webhook URL: ${publicWebhookUrl}\n`);
+    context.stdout.write(`${colorize("local", "dim", { env: context.env, stream: context.stdout })}  ${localUrl}\n`);
+    context.stdout.write(`${colorize("public", "dim", { env: context.env, stream: context.stdout })} ${publicWebhookUrl}\n`);
     if (attachedToExistingTunnel) {
-      context.stdout.write("attached to existing ngrok tunnel\n");
+      context.stdout.write(`${colorize("tunnel", "dim", { env: context.env, stream: context.stdout })} attached to existing ngrok tunnel\n`);
     }
-    context.stdout.write("Press Ctrl-C to quit.\n");
   } catch (error) {
     tunnel?.process?.kill();
     server.close();
@@ -158,7 +164,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
 
   const close = async (): Promise<void> => {
     tunnel?.process?.kill();
-    server.close();
+    await closeServer(server);
   };
   const runtimeCommands = attachRuntimeCommands({
     stdin: context.stdin,
@@ -179,6 +185,21 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   process.once("SIGTERM", close);
   await new Promise<void>((resolve) => server.once("close", resolve));
   return 0;
+}
+
+function closeServer(server: ReturnType<typeof createWebhookServer>): Promise<void> {
+  if (!server.listening) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 function isNgrokEndpointConflict(error: unknown): boolean {

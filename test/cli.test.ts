@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,6 +17,17 @@ function createContext(env = {}) {
     context: { cwd: process.cwd(), env, stdin: new PassThrough(), stdout, stderr },
     output: () => ({ stdout: out, stderr: err }),
   };
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 1000) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
 }
 
 test("prints top-level help", async () => {
@@ -54,4 +65,50 @@ test("returns from failed default tunnel startup instead of hanging", async () =
 
   assert.equal(code, 1);
   assert.equal(JSON.parse(output().stdout).ok, false);
+});
+
+test("localhost foreground output is polished and Q quits immediately", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const { context, output } = createContext({
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, "config"),
+    XDG_CACHE_HOME: path.join(home, "cache"),
+    NO_COLOR: "1",
+  });
+  context.stdin.isTTY = true;
+  context.stdin.setRawMode = () => context.stdin;
+
+  const run = runCli(["--localhost", "--port", "0"], context);
+  await waitUntil(() => output().stdout.includes("[R] Reload webhooks"));
+  context.stdin.write("SQ");
+  const code = await run;
+
+  assert.equal(code, 0);
+  assert.match(output().stdout, /codex-github-router ready/);
+  assert.match(output().stdout, /"mode": "localhost"/);
+  assert.doesNotMatch(output().stdout, /Press Ctrl-C to quit/);
+  assert.doesNotMatch(output().stdout, />/);
+});
+
+test("setup messaging triggers when existing config still requires setup", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const configHome = path.join(home, "config");
+  const cacheHome = path.join(home, "cache");
+  const configDir = path.join(configHome, "codex-github-router");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "config.json"), JSON.stringify({ version: 1, setupRequired: true }));
+  const { context, output } = createContext({
+    HOME: home,
+    XDG_CONFIG_HOME: configHome,
+    XDG_CACHE_HOME: cacheHome,
+    NO_COLOR: "1",
+  });
+
+  const code = await runCli(["--port", "0"], {
+    ...context,
+    env: { ...context.env, PATH: "/path/without/ngrok" },
+  });
+
+  assert.equal(code, 1);
+  assert.match(output().stdout, /First run setup/);
 });

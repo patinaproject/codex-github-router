@@ -36,9 +36,7 @@ test("handles reload, settings, and quit commands case-insensitively", async () 
     onQuit: async () => { quits += 1; },
   });
 
-  stdin.write("R");
-  stdin.write("s");
-  stdin.write("Q");
+  stdin.write("RsQ");
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(runtime.enabled, true);

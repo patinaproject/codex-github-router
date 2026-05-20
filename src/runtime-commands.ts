@@ -24,14 +24,17 @@ export function attachRuntimeCommands({
   stdin.resume();
 
   const onData = async (chunk: Buffer | string): Promise<void> => {
-    const command = chunk.toString("utf8").trim().toLowerCase();
-    if (command === "r") {
-      await onReload();
-    } else if (command === "s") {
-      await onSettings();
-    } else if (command === "q") {
-      await onQuit();
-      close();
+    const commands = chunk.toString("utf8").toLowerCase();
+    for (const command of commands) {
+      if (command === "r") {
+        await onReload();
+      } else if (command === "s") {
+        await onSettings();
+      } else if (command === "q") {
+        close();
+        await onQuit();
+        return;
+      }
     }
   };
   stdin.on("data", onData);

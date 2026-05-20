@@ -23,7 +23,7 @@ export function redact<T>(value: T): T | "[redacted]" {
 
 export function colorize(
   text: string,
-  color: "green" | "yellow" | "cyan" | "red",
+  color: "green" | "yellow" | "cyan" | "red" | "bold" | "dim",
   { env = process.env, stream = process.stdout }: { env?: NodeJS.ProcessEnv; stream?: Writable & { isTTY?: boolean } } = {},
 ): string {
   if (env.NO_COLOR || (!env.FORCE_COLOR && !stream.isTTY)) {
@@ -34,6 +34,8 @@ export function colorize(
     yellow: 33,
     cyan: 36,
     red: 31,
+    bold: 1,
+    dim: 2,
   };
   return `\u001b[${colors[color] ?? 0}m${text}\u001b[0m`;
 }
