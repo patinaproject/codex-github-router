@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
 
 const DEFAULT_NGROK_API_PORT = 4040;
+const DEFAULT_NGROK_API_PORT_SCAN = [4040, 4041, 4042, 4043, 4044, 4045];
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,6 +35,20 @@ function tunnelTargetsPort(tunnel: NgrokTunnel, expectedPort: number | undefined
   }
 }
 
+function tunnelLocalPort(tunnel: NgrokTunnel): number | undefined {
+  const addr = tunnel.config?.addr;
+  if (!addr) {
+    return undefined;
+  }
+  try {
+    const port = new URL(addr).port;
+    return port ? Number(port) : undefined;
+  } catch {
+    const match = addr.match(/:(\d+)$/);
+    return match?.[1] ? Number(match[1]) : undefined;
+  }
+}
+
 export async function discoverNgrokUrl({
   fetchImpl = fetch,
   expectedPort,
@@ -56,6 +71,40 @@ export async function discoverNgrokUrl({
     throw new Error("ngrok did not report an HTTPS tunnel");
   }
   return tunnel.public_url;
+}
+
+export interface ExistingNgrokTunnel {
+  publicUrl: string;
+  localPort: number;
+  apiPort: number;
+}
+
+export async function findExistingNgrokTunnel({
+  fetchImpl = fetch,
+  expectedPort,
+  apiPorts = DEFAULT_NGROK_API_PORT_SCAN,
+}: {
+  fetchImpl?: typeof fetch;
+  expectedPort?: number;
+  apiPorts?: number[];
+} = {}): Promise<ExistingNgrokTunnel | null> {
+  for (const apiPort of apiPorts) {
+    try {
+      const response = await fetchImpl(`http://127.0.0.1:${apiPort}/api/tunnels`);
+      if (!response.ok) {
+        continue;
+      }
+      const data = (await response.json()) as NgrokTunnelsResponse;
+      const tunnel = data.tunnels?.find((item) => item.public_url?.startsWith("https://") && tunnelTargetsPort(item, expectedPort));
+      const localPort = tunnel ? tunnelLocalPort(tunnel) : undefined;
+      if (tunnel?.public_url && localPort) {
+        return { publicUrl: tunnel.public_url, localPort, apiPort };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function parseNgrokApiPort(output: string): number | undefined {

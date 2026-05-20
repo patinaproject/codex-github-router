@@ -6,7 +6,7 @@ import { createWebhookServer, listen } from "./listener.js";
 import { parseRouterMode } from "./mode.js";
 import { colorize, fail, ok, writeJson } from "./output.js";
 import { attachRuntimeCommands } from "./runtime-commands.js";
-import { startNgrokTunnel } from "./tunnel.js";
+import { findExistingNgrokTunnel, startNgrokTunnel } from "./tunnel.js";
 import { localWebhookUrl, normalizeWebhookUrl } from "./url.js";
 import type { RouterOptions } from "./mode.js";
 import type { RuntimeContext } from "./types.js";
@@ -70,7 +70,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
 
   const cache = DeliveryCache.persistent({ env: context.env });
   await cache.load();
-  const server = createWebhookServer({
+  let server = createWebhookServer({
     mode: mode.kind,
     secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
     deliveryCache: cache,
@@ -83,23 +83,61 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; routing is pending configuration.\n`);
     },
   });
-  const address = await listen(server, { port: options.port });
+  let address = await listen(server, { port: options.port });
   let tunnel: Awaited<ReturnType<typeof startNgrokTunnel>> | undefined;
+  let attachedToExistingTunnel = false;
 
   try {
-    const localUrl = localWebhookUrl(address.port);
+    let localUrl = localWebhookUrl(address.port);
     let publicWebhookUrl = mode.kind === "url" ? mode.publicWebhookUrl : localUrl;
 
     if (mode.kind === "localhost") {
       context.stderr.write(colorize("Localhost mode is for local replay only; GitHub.com cannot reach this listener directly.\n", "yellow", { env: context.env, stream: context.stderr }));
     }
     if (mode.kind === "tunnel") {
-      tunnel = await startNgrokTunnel({ port: address.port, stderr: context.stderr, env: context.env });
-      publicWebhookUrl = normalizeWebhookUrl(tunnel.publicUrl);
+      try {
+        tunnel = await startNgrokTunnel({ port: address.port, stderr: context.stderr, env: context.env });
+        publicWebhookUrl = normalizeWebhookUrl(tunnel.publicUrl);
+      } catch (error) {
+        if (!isNgrokEndpointConflict(error)) {
+          throw error;
+        }
+        const existingTunnel = await findExistingNgrokTunnel();
+        if (!existingTunnel) {
+          throw error;
+        }
+        if (existingTunnel.localPort !== address.port) {
+          server.close();
+          server = createWebhookServer({
+            mode: mode.kind,
+            secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
+            deliveryCache: cache,
+            onEvent: ({ event, deliveryId, payload }) => {
+              const repository = payload.repository;
+              const repo =
+                repository && typeof repository === "object" && "full_name" in repository && typeof repository.full_name === "string"
+                  ? repository.full_name
+                  : "unknown repository";
+              context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; routing is pending configuration.\n`);
+            },
+          });
+          try {
+            address = await listen(server, { port: existingTunnel.localPort });
+          } catch {
+            throw new Error(`ngrok endpoint is already online for local port ${existingTunnel.localPort}, but that port is already used by another process. Stop that process, stop ngrok, use --localhost, or pass --url <https-url>.`);
+          }
+          localUrl = localWebhookUrl(address.port);
+        }
+        publicWebhookUrl = normalizeWebhookUrl(existingTunnel.publicUrl);
+        attachedToExistingTunnel = true;
+      }
     }
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
     context.stdout.write(`local listener: ${localUrl}\n`);
     context.stdout.write(`public webhook URL: ${publicWebhookUrl}\n`);
+    if (attachedToExistingTunnel) {
+      context.stdout.write("attached to existing ngrok tunnel\n");
+    }
     context.stdout.write("Press Ctrl-C to quit.\n");
   } catch (error) {
     tunnel?.process?.kill();
@@ -129,6 +167,10 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   process.once("SIGTERM", close);
   await new Promise<void>((resolve) => server.once("close", resolve));
   return 0;
+}
+
+function isNgrokEndpointConflict(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("ngrok endpoint is already online");
 }
 
 export async function runCli(args: string[], context: RuntimeContext): Promise<number> {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { discoverNgrokUrl, parseNgrokApiPort, startNgrokTunnel } from "../src/tunnel.js";
+import { discoverNgrokUrl, findExistingNgrokTunnel, parseNgrokApiPort, startNgrokTunnel } from "../src/tunnel.js";
 
 test("discovers the HTTPS public URL from ngrok tunnel metadata", async () => {
   const publicUrl = await discoverNgrokUrl({
@@ -39,6 +39,48 @@ test("queries the configured ngrok API port", async () => {
   });
 
   assert.equal(requestedUrls[0], "http://127.0.0.1:4545/api/tunnels");
+});
+
+test("finds an existing ngrok tunnel and local upstream port", async () => {
+  const requestedUrls: string[] = [];
+  const tunnel = await findExistingNgrokTunnel({
+    apiPorts: [4040, 4545],
+    fetchImpl: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes(":4040")) {
+        throw new Error("not running");
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          tunnels: [
+            { public_url: "https://existing.ngrok-free.app", config: { addr: "http://127.0.0.1:8787" } },
+          ],
+        }),
+      } satisfies Response;
+    },
+  });
+
+  assert.deepEqual(tunnel, { publicUrl: "https://existing.ngrok-free.app", localPort: 8787, apiPort: 4545 });
+  assert.deepEqual(requestedUrls, ["http://127.0.0.1:4040/api/tunnels", "http://127.0.0.1:4545/api/tunnels"]);
+});
+
+test("finds an existing ngrok tunnel only when it matches the expected port", async () => {
+  const tunnel = await findExistingNgrokTunnel({
+    expectedPort: 3000,
+    apiPorts: [4545],
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        tunnels: [
+          { public_url: "https://wrong.ngrok-free.app", config: { addr: "http://127.0.0.1:8787" } },
+          { public_url: "https://right.ngrok-free.app", config: { addr: "http://127.0.0.1:3000" } },
+        ],
+      }),
+    } satisfies Response),
+  });
+
+  assert.deepEqual(tunnel, { publicUrl: "https://right.ngrok-free.app", localPort: 3000, apiPort: 4545 });
 });
 
 test("discovers the HTTPS tunnel for the requested local port", async () => {
