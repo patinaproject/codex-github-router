@@ -65,6 +65,10 @@ export function sanitizeConfig(config: RouterConfig | null): RouterConfig | null
   return {
     version: config.version,
     publicWebhookUrl: sanitizeUrl(config.publicWebhookUrl),
+    localWebhookUrl: sanitizeUrl(config.localWebhookUrl),
+    setupRequired: Boolean(config.setupRequired),
+    mode: config.mode,
+    attachedToExistingTunnel: Boolean(config.attachedToExistingTunnel),
     repositories: sanitizeTargets(config.repositories),
     organizations: sanitizeTargets(config.organizations),
     hasStoredSecrets: Boolean(config.hasStoredSecrets),

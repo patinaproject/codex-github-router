@@ -1,4 +1,4 @@
-import { clearLocalState, readConfig, sanitizeConfig } from "./config.js";
+import { clearLocalState, readConfig, sanitizeConfig, writeConfig } from "./config.js";
 import { DeliveryCache } from "./dedupe-cache.js";
 import { doctor } from "./doctor.js";
 import { githubGet } from "./github-request.js";
@@ -132,6 +132,17 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
         attachedToExistingTunnel = true;
       }
     }
+    await writeConfig({
+      version: 1,
+      mode: mode.kind,
+      localWebhookUrl: localUrl,
+      publicWebhookUrl,
+      setupRequired: true,
+      attachedToExistingTunnel,
+      repositories: [],
+      organizations: [],
+      hasStoredSecrets: false,
+    }, { env: context.env });
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
     context.stdout.write(`local listener: ${localUrl}\n`);
     context.stdout.write(`public webhook URL: ${publicWebhookUrl}\n`);
@@ -157,7 +168,8 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     },
     onSettings: async () => {
       const config = await readConfig({ env: context.env });
-      context.stdout.write(`${JSON.stringify(sanitizeConfig(config), null, 2)}\n`);
+      const settings = sanitizeConfig(config);
+      context.stdout.write(`${settings ? JSON.stringify(settings, null, 2) : "No router settings found. Setup has not completed yet."}\n`);
     },
     onQuit: close,
   });

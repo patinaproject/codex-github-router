@@ -33,6 +33,10 @@ test("sanitizes settings without exposing secret fields", () => {
     sanitizeConfig({
       version: 1,
       publicWebhookUrl: "https://user:secret@router.example.com/webhooks/github?token=never#print",
+      localWebhookUrl: "http://127.0.0.1:3000/webhooks/github",
+      setupRequired: true,
+      mode: "tunnel",
+      attachedToExistingTunnel: true,
       webhookSecret: "never-print",
       repositories: [{ fullName: "patinaproject/codex-github-router", hookId: 123, webhookSecret: "never-print" }],
       organizations: [{ login: "patinaproject", token: "never-print" }],
@@ -40,6 +44,10 @@ test("sanitizes settings without exposing secret fields", () => {
     {
       version: 1,
       publicWebhookUrl: "https://router.example.com/webhooks/github",
+      localWebhookUrl: "http://127.0.0.1:3000/webhooks/github",
+      setupRequired: true,
+      mode: "tunnel",
+      attachedToExistingTunnel: true,
       repositories: [{ fullName: "patinaproject/codex-github-router", hookId: 123 }],
       organizations: [{ login: "patinaproject" }],
       hasStoredSecrets: false,
