@@ -2,6 +2,18 @@
 
 Routes GitHub events to Codex.
 
+## Why This Exists
+
+I wanted my GitHub PR activity to talk directly to my Codex Desktop sessions.
+My workflow already turns Q&A into issues, issues into worktrees, and worktrees
+into PRs, but too much time still went into babysitting agents: telling the
+right session when I left review feedback, created a code review, or needed a
+branch updated.
+
+I could not find a small tool for that loop, so I made one. The goal is simple:
+spend more time reviewing and testing code, and less time manually relaying
+messages between GitHub and local Codex worktrees.
+
 ## Usage
 
 Run the router as a foreground CLI:
