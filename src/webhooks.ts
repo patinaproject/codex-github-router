@@ -9,6 +9,12 @@ const WEBHOOK_EVENTS = ["issues", "issue_comment", "pull_request", "pull_request
 export interface WebhookSyncResult {
   repositories: Array<{ fullName: string; hookId: number | string; action: "created" | "updated" }>;
   organizations: Array<{ login: string; hookId: number | string; action: "created" | "updated" }>;
+  warnings: Array<{ target: string; code: "hook_id_missing" | "hook_missing"; message: string }>;
+}
+
+export interface WebhookDeleteResult {
+  repositories: Array<{ fullName: string; hookId: number | string; action: "deleted" | "already_missing" }>;
+  organizations: Array<{ login: string; hookId: number | string; action: "deleted" | "already_missing" }>;
 }
 
 type GhApi = (args: string[]) => Promise<string>;
@@ -18,13 +24,15 @@ export async function syncGitHubWebhooks({
   publicWebhookUrl,
   env = process.env,
   ghApi = defaultGhApi,
+  createMissing = true,
 }: {
   config: RouterConfig;
   publicWebhookUrl: string;
   env?: NodeJS.ProcessEnv;
   ghApi?: GhApi;
+  createMissing?: boolean;
 }): Promise<WebhookSyncResult> {
-  const result: WebhookSyncResult = { repositories: [], organizations: [] };
+  const result: WebhookSyncResult = { repositories: [], organizations: [], warnings: [] };
   const envSecret = env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET;
   const secret = config.webhookSecret ?? envSecret ?? generateWebhookSecret();
   if (!envSecret || config.webhookSecret) {
@@ -34,10 +42,17 @@ export async function syncGitHubWebhooks({
   for (const target of configuredTargets(config.organizations, "login")) {
     const synced = await syncTargetWebhook({
       apiPath: `/orgs/${target.login}/hooks`,
+      target: target.login,
+      hookId: target.hookId,
       publicWebhookUrl,
       secret,
       ghApi,
+      createMissing,
     });
+    if (synced.warning) {
+      result.warnings.push(synced.warning);
+      continue;
+    }
     target.hookId = synced.hookId;
     result.organizations.push({ login: target.login, ...synced });
   }
@@ -45,10 +60,17 @@ export async function syncGitHubWebhooks({
   for (const target of configuredTargets(config.repositories, "fullName")) {
     const synced = await syncTargetWebhook({
       apiPath: `/repos/${target.fullName}/hooks`,
+      target: target.fullName,
+      hookId: target.hookId,
       publicWebhookUrl,
       secret,
       ghApi,
+      createMissing,
     });
+    if (synced.warning) {
+      result.warnings.push(synced.warning);
+      continue;
+    }
     target.hookId = synced.hookId;
     result.repositories.push({ fullName: target.fullName, ...synced });
   }
@@ -57,24 +79,82 @@ export async function syncGitHubWebhooks({
   return result;
 }
 
+export async function deleteGitHubWebhooks({
+  config,
+  ghApi = defaultGhApi,
+}: {
+  config: RouterConfig;
+  ghApi?: GhApi;
+}): Promise<WebhookDeleteResult> {
+  const result: WebhookDeleteResult = { repositories: [], organizations: [] };
+
+  for (const target of targetsWithHookIds(config.organizations, "login")) {
+    const action = await deleteTargetWebhook({
+      apiPath: `/orgs/${target.login}/hooks/${target.hookId}`,
+      ghApi,
+    });
+    result.organizations.push({ login: target.login, hookId: target.hookId, action });
+  }
+
+  for (const target of targetsWithHookIds(config.repositories, "fullName")) {
+    const action = await deleteTargetWebhook({
+      apiPath: `/repos/${target.fullName}/hooks/${target.hookId}`,
+      ghApi,
+    });
+    result.repositories.push({ fullName: target.fullName, hookId: target.hookId, action });
+  }
+
+  return result;
+}
+
 async function syncTargetWebhook({
   apiPath,
+  target,
+  hookId,
   publicWebhookUrl,
   secret,
   ghApi,
+  createMissing,
 }: {
   apiPath: string;
+  target: string;
+  hookId: number | string | undefined;
   publicWebhookUrl: string;
   secret: string;
   ghApi: GhApi;
-}): Promise<{ hookId: number | string; action: "created" | "updated" }> {
-  const hooks = parseHooks(await ghApi([apiPath]));
-  const existing = hooks.find((hook) => hook.config?.url === publicWebhookUrl);
+  createMissing: boolean;
+}): Promise<
+  | { hookId: number | string; action: "created" | "updated"; warning?: never }
+  | { warning: WebhookSyncResult["warnings"][number]; hookId?: never; action?: never }
+> {
   const fields = webhookFields(publicWebhookUrl, secret);
 
-  if (existing?.id !== undefined) {
-    await ghApi(["-X", "PATCH", `${apiPath}/${existing.id}`, ...fields]);
-    return { hookId: existing.id, action: "updated" };
+  if (hookId !== undefined) {
+    try {
+      await ghApi(["-X", "PATCH", `${apiPath}/${hookId}`, ...fields]);
+      return { hookId, action: "updated" };
+    } catch (error) {
+      if (!isMissingHookError(error) || createMissing) {
+        throw error;
+      }
+      return {
+        warning: {
+          target,
+          code: "hook_missing",
+          message: `Remembered GitHub webhook ${hookId} for ${target} no longer exists.`,
+        },
+      };
+    }
+  }
+
+  if (!createMissing) {
+    return {
+      warning: {
+        target,
+        code: "hook_id_missing",
+        message: `No remembered GitHub hook ID for ${target}; reload will not create a new webhook.`,
+      },
+    };
   }
 
   const created = parseHook(await ghApi(["-X", "POST", apiPath, ...fields]));
@@ -111,14 +191,25 @@ function configuredTargets(targets: unknown[] | undefined, idKey: "login" | "ful
   });
 }
 
+function targetsWithHookIds(targets: unknown[] | undefined, idKey: "login"): Array<Record<string, unknown> & { login: string; hookId: number | string }>;
+function targetsWithHookIds(targets: unknown[] | undefined, idKey: "fullName"): Array<Record<string, unknown> & { fullName: string; hookId: number | string }>;
+function targetsWithHookIds(targets: unknown[] | undefined, idKey: "login" | "fullName") {
+  return (targets ?? []).flatMap((target) => {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      return [];
+    }
+    const record = target as Record<string, unknown>;
+    const hookId = record.hookId;
+    if (typeof record[idKey] !== "string" || (typeof hookId !== "number" && typeof hookId !== "string")) {
+      return [];
+    }
+    return [record];
+  });
+}
+
 interface GitHubHook {
   id?: number | string;
   config?: { url?: string };
-}
-
-function parseHooks(stdout: string): GitHubHook[] {
-  const parsed = JSON.parse(stdout) as unknown;
-  return Array.isArray(parsed) ? parsed.flatMap((value) => parseHook(value)) : [];
 }
 
 function parseHook(value: unknown): GitHubHook {
@@ -138,6 +229,31 @@ function parseHook(value: unknown): GitHubHook {
     hook.config = { url: config.url };
   }
   return hook;
+}
+
+function isMissingHookError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("404") || error.message.includes("Not Found");
+}
+
+async function deleteTargetWebhook({
+  apiPath,
+  ghApi,
+}: {
+  apiPath: string;
+  ghApi: GhApi;
+}): Promise<"deleted" | "already_missing"> {
+  try {
+    await ghApi(["-X", "DELETE", apiPath]);
+    return "deleted";
+  } catch (error) {
+    if (isMissingHookError(error)) {
+      return "already_missing";
+    }
+    throw error;
+  }
 }
 
 async function defaultGhApi(args: string[]): Promise<string> {

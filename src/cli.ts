@@ -10,7 +10,7 @@ import { generateWebhookSecret } from "./security.js";
 import { SETUP_TITLE, runInteractiveSettings, runInteractiveSetup } from "./setup.js";
 import { findExistingNgrokTunnel, startNgrokTunnel } from "./tunnel.js";
 import { localWebhookUrl, normalizeWebhookUrl } from "./url.js";
-import { syncGitHubWebhooks } from "./webhooks.js";
+import { deleteGitHubWebhooks, syncGitHubWebhooks } from "./webhooks.js";
 import type { RouterOptions } from "./mode.js";
 import type { RouterConfig, RuntimeContext } from "./types.js";
 import type { SetupSelection } from "./setup.js";
@@ -66,6 +66,10 @@ function printHelp(stdout: RuntimeContext["stdout"]): void {
 async function runStart(options: RouterOptions, context: RuntimeContext): Promise<number> {
   const mode = parseRouterMode(options);
   if (mode.kind === "clear") {
+    const existingConfig = await readConfig({ env: context.env });
+    if (existingConfig) {
+      await deleteGitHubWebhooks({ config: existingConfig });
+    }
     await clearLocalState({ env: context.env });
     const result = ok({ cleared: true });
     options.json ? writeJson(context.stdout, result) : context.stdout.write("Cleared local router settings and cache.\n");
@@ -196,9 +200,12 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
         context.stdout.write("No public webhook URL is configured yet.\n");
         return;
       }
-      const result = await syncGitHubWebhooks({ config, publicWebhookUrl: config.publicWebhookUrl, env: context.env });
+      const result = await syncGitHubWebhooks({ config, publicWebhookUrl: config.publicWebhookUrl, env: context.env, createMissing: false });
       await writeConfig(config, { env: context.env });
       context.stdout.write(`Reloaded webhooks: ${result.organizations.length} organizations, ${result.repositories.length} repositories.\n`);
+      for (const warning of result.warnings) {
+        context.stdout.write(`${colorize("warning", "yellow", { env: context.env, stream: context.stdout })} ${warning.message}\n`);
+      }
     },
     onSettings: async () => {
       const config = await readConfig({ env: context.env });
@@ -326,7 +333,7 @@ export async function runCli(args: string[], context: RuntimeContext): Promise<n
         writeJson(context.stdout, fail("public_url_missing", "Run the router once with a public URL before reloading webhooks."));
         return 1;
       }
-      const result = await syncGitHubWebhooks({ config, publicWebhookUrl: config.publicWebhookUrl, env: context.env });
+      const result = await syncGitHubWebhooks({ config, publicWebhookUrl: config.publicWebhookUrl, env: context.env, createMissing: false });
       await writeConfig(config, { env: context.env });
       writeJson(context.stdout, ok({ reloaded: true, ...result }));
       return 0;
