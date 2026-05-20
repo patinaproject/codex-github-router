@@ -14,6 +14,7 @@ import { deleteGitHubWebhooks, syncGitHubWebhooks } from "./webhooks.js";
 import type { RouterOptions } from "./mode.js";
 import type { RouterConfig, RuntimeContext } from "./types.js";
 import type { SetupSelection } from "./setup.js";
+import type { WebhookEvent } from "./listener.js";
 
 interface ParsedArgs {
   options: RouterOptions;
@@ -98,18 +99,25 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   if (firstRunSetup && !options.json && setupSelection.setupRequired) {
     return 1;
   }
+  let activeConfig: RouterConfig | null = existingConfig;
+  const onEvent = ({ event, deliveryId, payload }: WebhookEvent) => {
+    const repository = payload.repository;
+    const repo =
+      repository && typeof repository === "object" && "full_name" in repository && typeof repository.full_name === "string"
+        ? repository.full_name
+        : "unknown repository";
+    const route = resolveRoutingTarget(activeConfig, repo);
+    if (route) {
+      context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; using ${route.kind} settings ${route.name}.\n`);
+      return;
+    }
+    context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; no matching router settings found.\n`);
+  };
   let server = createWebhookServer({
     mode: mode.kind,
     secret: webhookSecret,
     deliveryCache: cache,
-    onEvent: ({ event, deliveryId, payload }) => {
-      const repository = payload.repository;
-      const repo =
-        repository && typeof repository === "object" && "full_name" in repository && typeof repository.full_name === "string"
-          ? repository.full_name
-          : "unknown repository";
-      context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; routing is pending configuration.\n`);
-    },
+    onEvent,
   });
   let address = await listen(server, { port: options.port });
   let tunnel: Awaited<ReturnType<typeof startNgrokTunnel>> | undefined;
@@ -140,14 +148,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
             mode: mode.kind,
             secret: webhookSecret,
             deliveryCache: cache,
-            onEvent: ({ event, deliveryId, payload }) => {
-              const repository = payload.repository;
-              const repo =
-                repository && typeof repository === "object" && "full_name" in repository && typeof repository.full_name === "string"
-                  ? repository.full_name
-                  : "unknown repository";
-              context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; routing is pending configuration.\n`);
-            },
+            onEvent,
           });
           try {
             address = await listen(server, { port: existingTunnel.localPort });
@@ -178,6 +179,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       await syncGitHubWebhooks({ config: nextConfig, publicWebhookUrl, env: context.env });
     }
     await writeConfig(nextConfig, { env: context.env });
+    activeConfig = nextConfig;
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
     context.stdout.write(`${colorize("local", "dim", { env: context.env, stream: context.stdout })}  ${localUrl}\n`);
     context.stdout.write(`${colorize("public", "dim", { env: context.env, stream: context.stdout })} ${publicWebhookUrl}\n`);
@@ -234,6 +236,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
         await syncGitHubWebhooks({ config: nextConfig, publicWebhookUrl: nextConfig.publicWebhookUrl, env: context.env });
       }
       await writeConfig(nextConfig, { env: context.env });
+      activeConfig = nextConfig;
     },
     onQuit: close,
   });
@@ -328,6 +331,42 @@ function hookSettingsUrls(config: RouterConfig): string[] {
       return [`https://github.com/${record.fullName}/settings/hooks/${record.hookId}`];
     }),
   ];
+}
+
+export function resolveRoutingTarget(config: RouterConfig | null, fullName: string): { kind: "repository" | "organization"; name: string } | null {
+  if (!config || fullName === "unknown repository") {
+    return null;
+  }
+  const repository = (config.repositories ?? []).find((target) => {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      return false;
+    }
+    const record = target as Record<string, unknown>;
+    return record.fullName === fullName && hasActiveRepositoryRouting(record);
+  });
+  if (repository && typeof (repository as Record<string, unknown>).fullName === "string") {
+    return { kind: "repository", name: (repository as Record<string, unknown>).fullName as string };
+  }
+
+  const [owner] = fullName.split("/");
+  if (!owner) {
+    return null;
+  }
+  const organization = (config.organizations ?? []).find((target) => {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      return false;
+    }
+    const record = target as Record<string, unknown>;
+    return record.login === owner && record.enabled !== false;
+  });
+  if (organization && typeof (organization as Record<string, unknown>).login === "string") {
+    return { kind: "organization", name: (organization as Record<string, unknown>).login as string };
+  }
+  return null;
+}
+
+function hasActiveRepositoryRouting(record: Record<string, unknown>): boolean {
+  return record.enabled === true || record.issueAutomationEnabled === true;
 }
 
 function isHookId(value: unknown): value is number | string {

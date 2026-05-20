@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
-import { runCli } from "../src/cli.js";
+import { resolveRoutingTarget, runCli } from "../src/cli.js";
 import { SETUP_TITLE } from "../src/setup.js";
 
 function createContext(env = {}) {
@@ -115,4 +115,38 @@ test("startup preflight runs before setup when existing config still requires se
   assert.match(output().stderr, /Preflight failed before changing GitHub webhooks/);
   assert.doesNotMatch(output().stdout, /Setup requires an interactive terminal/);
   assert.doesNotMatch(output().stdout, /codex-github-router ready/);
+});
+
+test("routes organization webhook deliveries through organization settings", () => {
+  assert.deepEqual(
+    resolveRoutingTarget({
+      repositories: [{
+        fullName: "patinaproject/codex-github-router",
+        enabled: false,
+        issueAutomationEnabled: false,
+      }],
+      organizations: [{
+        login: "patinaproject",
+        enabled: true,
+      }],
+    }, "patinaproject/codex-github-router"),
+    { kind: "organization", name: "patinaproject" },
+  );
+});
+
+test("repository routing overrides organization settings when repository routing is active", () => {
+  assert.deepEqual(
+    resolveRoutingTarget({
+      repositories: [{
+        fullName: "patinaproject/codex-github-router",
+        enabled: false,
+        issueAutomationEnabled: true,
+      }],
+      organizations: [{
+        login: "patinaproject",
+        enabled: true,
+      }],
+    }, "patinaproject/codex-github-router"),
+    { kind: "repository", name: "patinaproject/codex-github-router" },
+  );
 });
