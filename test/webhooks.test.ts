@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { deleteGitHubWebhooks, syncGitHubWebhooks } from "../src/webhooks.js";
 import type { RouterConfig } from "../src/types.js";
@@ -195,4 +198,40 @@ test("propagates webhook deletion failures so local config can be preserved", as
     }),
     /permission denied/,
   );
+});
+
+test("sanitizes org webhook scope failures without printing secrets", async () => {
+  const originalPath = process.env.PATH;
+  const binDir = await mkdtemp(path.join(os.tmpdir(), "router-gh-"));
+  const ghPath = path.join(binDir, "gh");
+  await writeFile(ghPath, [
+    "#!/bin/sh",
+    "echo 'gh: Not Found (HTTP 404)' >&2",
+    "echo 'gh: This API operation needs the \"admin:org_hook\" scope. To request it, run:  gh auth refresh -h github.com -s admin:org_hook' >&2",
+    "exit 1",
+    "",
+  ].join("\n"));
+  await chmod(ghPath, 0o755);
+  process.env.PATH = binDir;
+  try {
+    await assert.rejects(
+      syncGitHubWebhooks({
+        config: {
+          organizations: [{ login: "patinaproject", enabled: true }],
+        },
+        publicWebhookUrl: "https://router.example.com/webhooks/github",
+        env: { CODEX_GITHUB_ROUTER_WEBHOOK_SECRET: "super-secret-value" },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /admin:org_hook/);
+        assert.match(error.message, /gh auth refresh -h github\.com -s admin:org_hook/);
+        assert.doesNotMatch(error.message, /super-secret-value/);
+        assert.doesNotMatch(error.message, /config\[secret\]/);
+        return true;
+      },
+    );
+  } finally {
+    process.env.PATH = originalPath;
+  }
 });

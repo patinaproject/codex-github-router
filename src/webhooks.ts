@@ -257,6 +257,32 @@ async function deleteTargetWebhook({
 }
 
 async function defaultGhApi(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("gh", ["api", ...args], { timeout: 30000 });
-  return stdout;
+  try {
+    const { stdout } = await execFileAsync("gh", ["api", ...args], { timeout: 30000 });
+    return stdout;
+  } catch (error) {
+    throw new Error(sanitizeGitHubApiError(args, error));
+  }
+}
+
+function sanitizeGitHubApiError(args: string[], error: unknown): string {
+  const stderr = typeof error === "object" && error && "stderr" in error && typeof error.stderr === "string"
+    ? error.stderr
+    : "";
+  const apiPath = args.find((arg) => arg.startsWith("/")) ?? "unknown endpoint";
+  const methodIndex = args.findIndex((arg) => arg === "-X");
+  const method = methodIndex >= 0 ? args[methodIndex + 1] ?? "GET" : "GET";
+
+  if (apiPath.startsWith("/orgs/") && stderr.includes("admin:org_hook")) {
+    return "GitHub organization webhooks require the admin:org_hook scope. Run: gh auth refresh -h github.com -s admin:org_hook";
+  }
+
+  const detail = sanitizeSecretText(stderr.trim() || (error instanceof Error ? error.message : "unknown error"));
+  return `GitHub API ${method} ${apiPath} failed: ${detail}`;
+}
+
+function sanitizeSecretText(value: string): string {
+  return value
+    .replace(/config\[secret\]=\S+/g, "config[secret]=[redacted]")
+    .replace(/-f\s+config\[secret\]=\S+/g, "-f config[secret]=[redacted]");
 }

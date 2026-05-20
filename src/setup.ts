@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { cancel, intro, isCancel, multiselect, note, outro, select, text } from "@clack/prompts";
+import { colorize } from "./output.js";
 import type { RuntimeContext } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -383,7 +384,7 @@ const clackPrompts: SetupPromptAdapter = {
       return [];
     }
     const selected = await multiselect({
-      message,
+      message: `${message} ${colorize("(space to toggle)", "dim", { env: context.env, stream: context.stdout })}`,
       options: items.map((item) => ({ value: item.id, label: item.label })),
       required: false,
       input: context.stdin,
