@@ -107,6 +107,10 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       repository && typeof repository === "object" && "full_name" in repository && typeof repository.full_name === "string"
         ? repository.full_name
         : "unknown repository";
+    if (event === "ping") {
+      context.stderr.write(`Received ping delivery ${deliveryId ?? "unknown"} from ${describePingSource(payload)}; webhook is reachable.\n`);
+      return;
+    }
     const route = resolveRoutingTarget(activeConfig, repo);
     if (route) {
       context.stderr.write(`Received ${event} delivery ${deliveryId ?? "unknown"} for ${repo}; using ${route.kind} settings ${route.name}.\n`);
@@ -346,6 +350,38 @@ function hookSettingsUrls(config: RouterConfig): string[] {
       return [`https://github.com/${record.fullName}/settings/hooks/${record.hookId}`];
     }),
   ];
+}
+
+export function describePingSource(payload: Record<string, unknown>): string {
+  const repository = objectField(payload, "repository");
+  const repositoryName = stringField(repository, "full_name");
+  if (repositoryName) {
+    return `repository webhook ${repositoryName}`;
+  }
+
+  const organization = objectField(payload, "organization");
+  const organizationLogin = stringField(organization, "login");
+  if (organizationLogin) {
+    return `organization webhook ${organizationLogin}`;
+  }
+
+  const hook = objectField(payload, "hook");
+  const hookType = stringField(hook, "type");
+  if (hookType) {
+    return `${hookType} webhook`;
+  }
+
+  return "GitHub webhook";
+}
+
+function objectField(value: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const field = value[key];
+  return field && typeof field === "object" && !Array.isArray(field) ? field as Record<string, unknown> : undefined;
+}
+
+function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const field = value?.[key];
+  return typeof field === "string" && field.length > 0 ? field : undefined;
 }
 
 export function resolveRoutingTarget(config: RouterConfig | null, fullName: string): { kind: "repository" | "organization"; name: string } | null {

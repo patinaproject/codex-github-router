@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
-import { resolveRoutingTarget, runCli } from "../src/cli.js";
+import { describePingSource, resolveRoutingTarget, runCli } from "../src/cli.js";
 import { SETUP_TITLE } from "../src/setup.js";
 
 function createContext(env = {}) {
@@ -148,5 +148,25 @@ test("repository routing overrides organization settings when repository routing
       }],
     }, "patinaproject/codex-github-router"),
     { kind: "repository", name: "patinaproject/codex-github-router" },
+  );
+});
+
+test("describes organization webhook ping deliveries clearly", () => {
+  assert.equal(
+    describePingSource({
+      organization: { login: "patinaproject" },
+      hook: { type: "Organization" },
+    }),
+    "organization webhook patinaproject",
+  );
+});
+
+test("describes repository webhook ping deliveries clearly", () => {
+  assert.equal(
+    describePingSource({
+      repository: { full_name: "patinaproject/codex-github-router" },
+      hook: { type: "Repository" },
+    }),
+    "repository webhook patinaproject/codex-github-router",
   );
 });
