@@ -74,6 +74,39 @@ test("quit closes only once even if Q is repeated", async () => {
   assert.equal(quits, 1);
 });
 
+test("ctrl-c quits immediately in raw terminal mode", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  let rawMode: boolean | undefined;
+  let paused = false;
+  stdin.setRawMode = (value: boolean) => {
+    rawMode = value;
+    return stdin;
+  };
+  const originalPause = stdin.pause.bind(stdin);
+  stdin.pause = () => {
+    paused = true;
+    return originalPause();
+  };
+  const stdout = new PassThrough();
+  let quits = 0;
+
+  attachRuntimeCommands({
+    stdin,
+    stdout,
+    onReload() {},
+    onSettings() {},
+    onQuit: async () => { quits += 1; },
+  });
+
+  stdin.write("\u0003");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(quits, 1);
+  assert.equal(rawMode, false);
+  assert.equal(paused, true);
+});
+
 test("does not write a readline prompt", () => {
   const stdin = new PassThrough();
   stdin.isTTY = true;

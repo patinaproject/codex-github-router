@@ -60,7 +60,11 @@ export function attachRuntimeCommands({
   const onData = async (chunk: Buffer | string): Promise<void> => {
     const commands = chunk.toString("utf8").toLowerCase();
     for (const command of commands) {
-      if (command === "r") {
+      if (command === "\u0003") {
+        close();
+        await onQuit();
+        return;
+      } else if (command === "r") {
         await onReload();
       } else if (command === "s") {
         await runWithSuspendedHotkeys(onSettings);
