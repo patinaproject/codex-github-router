@@ -136,11 +136,14 @@ export async function runInteractiveSetup({
     }
 
     const configuredOrganizations = configureTargets(selectedOrganizations);
-    const configuredRepositories = configureTargets(repositorySettingsTargets({
+    const configuredRepositories = configureRepositoryTargets({
+      targets: repositorySettingsTargets({
+        selectedRepositories,
+        selectedOrganizations,
+        availableRepositories,
+      }),
       selectedRepositories,
-      selectedOrganizations,
-      availableRepositories,
-    }));
+    });
     const menuResult = await settingsMenu({
       repositories: configuredRepositories,
       organizations: configuredOrganizations,
@@ -242,6 +245,20 @@ function configureTargets(targets: SetupTarget[]): ConfiguredTarget[] {
     issueAutomationEnabled: false,
     issueAutomationLabel: DEFAULT_ISSUE_AUTOMATION_LABEL,
     issueAutomationPrompt: DEFAULT_ISSUE_AUTOMATION_PROMPT,
+  }));
+}
+
+function configureRepositoryTargets({
+  targets,
+  selectedRepositories,
+}: {
+  targets: SetupTarget[];
+  selectedRepositories: SetupTarget[];
+}): ConfiguredTarget[] {
+  const selectedRepositoryIds = new Set(selectedRepositories.map((repository) => repository.id));
+  return configureTargets(targets).map((target) => ({
+    ...target,
+    enabled: selectedRepositoryIds.has(target.id),
   }));
 }
 

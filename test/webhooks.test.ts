@@ -152,6 +152,30 @@ test("skips disabled webhook targets", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("syncing an organization-covered repository does not create a repo hook when disabled", async () => {
+  const calls: string[][] = [];
+  const config: RouterConfig = {
+    organizations: [{ login: "patinaproject", enabled: true }],
+    repositories: [{ fullName: "patinaproject/using-github", enabled: false }],
+  };
+
+  const result = await syncGitHubWebhooks({
+    config,
+    publicWebhookUrl: "https://router.example.com/webhooks/github",
+    env: { CODEX_GITHUB_ROUTER_WEBHOOK_SECRET: "test-secret" },
+    ghApi: async (args) => {
+      calls.push(args);
+      return JSON.stringify({ id: 123 });
+    },
+  });
+
+  assert.deepEqual(result.organizations, [{ login: "patinaproject", hookId: 123, action: "created" }]);
+  assert.deepEqual(result.repositories, []);
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["-X", "POST", "/orgs/patinaproject/hooks"],
+  ]);
+});
+
 test("deletes remembered repository and organization webhooks by hook ID", async () => {
   const calls: string[][] = [];
   const result = await deleteGitHubWebhooks({

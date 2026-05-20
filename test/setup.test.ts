@@ -116,14 +116,14 @@ test("interactive setup selects repositories and organizations with Clack prompt
     repositories: [
       {
         fullName: "owner/one",
-        enabled: false,
+        enabled: true,
         issueAutomationEnabled: false,
         issueAutomationLabel: "ready-for-agent",
         issueAutomationPrompt: "Develop this issue using TDD, open a pull request, and report verification steps.",
       },
       {
         fullName: "owner/two",
-        enabled: true,
+        enabled: false,
         issueAutomationEnabled: false,
         issueAutomationLabel: "ready-for-agent",
         issueAutomationPrompt: "Develop this issue using TDD, open a pull request, and report verification steps.",
@@ -160,6 +160,50 @@ test("interactive setup selects repositories and organizations with Clack prompt
     "outro:Setup saved. Starting router...",
   ]);
 });
+
+test("organization-covered repositories do not create repository webhooks by default", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  const events: string[] = [];
+  const result = await runInteractiveSetup({
+    context: {
+      stdin,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      env: { NO_COLOR: "1" },
+    },
+    discoverTargets: async () => ({
+      repositories: [],
+      organizations: [{ id: "owner", label: "owner" }],
+    }),
+    discoverRepositoriesForOrganizations: async () => [
+      { id: "owner/one", label: "owner/one" },
+      { id: "owner/two", label: "owner/two" },
+    ],
+    prompts: createTestSetupPrompts({
+      organizations: [{ id: "owner", label: "owner" }],
+      repositories: [],
+      settings: ["finish"],
+      events,
+    }),
+  });
+
+  assert.deepEqual(result.repositories.map((repository) => ({
+    fullName: repository.fullName,
+    enabled: repository.enabled,
+  })), [
+    { fullName: "owner/one", enabled: false },
+    { fullName: "owner/two", enabled: false },
+  ]);
+  assert.deepEqual(events, [
+    "intro:Commencing simulation . . .",
+    "multiselect:Select organizations for organization webhooks",
+    "multiselect:Select repositories for repository webhooks",
+    "select:finish",
+    "outro:Setup saved. Starting router...",
+  ]);
+});
+
 
 test("interactive setup reports non-TTY setup requirement", async () => {
   const stdout = new PassThrough();
