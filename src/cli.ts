@@ -227,6 +227,10 @@ function configToSetupSelection(config: RouterConfig | null): SetupSelection | n
         fullName: record.fullName,
         enabled: typeof record.enabled === "boolean" ? record.enabled : true,
         issueAutomationEnabled: typeof record.issueAutomationEnabled === "boolean" ? record.issueAutomationEnabled : false,
+        issueAutomationLabel: typeof record.issueAutomationLabel === "string" ? record.issueAutomationLabel : "ready-for-agent",
+        issueAutomationPrompt: typeof record.issueAutomationPrompt === "string"
+          ? record.issueAutomationPrompt
+          : "Develop this issue using TDD, open a pull request, and report verification steps.",
       }];
     }),
     organizations: (config.organizations ?? []).flatMap((target) => {
@@ -241,6 +245,10 @@ function configToSetupSelection(config: RouterConfig | null): SetupSelection | n
         login: record.login,
         enabled: typeof record.enabled === "boolean" ? record.enabled : true,
         issueAutomationEnabled: typeof record.issueAutomationEnabled === "boolean" ? record.issueAutomationEnabled : false,
+        issueAutomationLabel: typeof record.issueAutomationLabel === "string" ? record.issueAutomationLabel : "ready-for-agent",
+        issueAutomationPrompt: typeof record.issueAutomationPrompt === "string"
+          ? record.issueAutomationPrompt
+          : "Develop this issue using TDD, open a pull request, and report verification steps.",
       }];
     }),
     setupRequired: Boolean(config.setupRequired),

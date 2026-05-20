@@ -38,8 +38,19 @@ test("sanitizes settings without exposing secret fields", () => {
       mode: "tunnel",
       attachedToExistingTunnel: true,
       webhookSecret: "never-print",
-      repositories: [{ fullName: "patinaproject/codex-github-router", hookId: 123, webhookSecret: "never-print" }],
-      organizations: [{ login: "patinaproject", token: "never-print" }],
+      repositories: [{
+        fullName: "patinaproject/codex-github-router",
+        hookId: 123,
+        webhookSecret: "never-print",
+        issueAutomationLabel: "ready-for-agent",
+        issueAutomationPrompt: "Implement with TDD.",
+      }],
+      organizations: [{
+        login: "patinaproject",
+        token: "never-print",
+        issueAutomationLabel: "ready-for-codex",
+        issueAutomationPrompt: "Open a draft PR.",
+      }],
     }),
     {
       version: 1,
@@ -48,8 +59,17 @@ test("sanitizes settings without exposing secret fields", () => {
       setupRequired: true,
       mode: "tunnel",
       attachedToExistingTunnel: true,
-      repositories: [{ fullName: "patinaproject/codex-github-router", hookId: 123 }],
-      organizations: [{ login: "patinaproject" }],
+      repositories: [{
+        fullName: "patinaproject/codex-github-router",
+        hookId: 123,
+        issueAutomationLabel: "ready-for-agent",
+        issueAutomationPrompt: "Implement with TDD.",
+      }],
+      organizations: [{
+        login: "patinaproject",
+        issueAutomationLabel: "ready-for-codex",
+        issueAutomationPrompt: "Open a draft PR.",
+      }],
       hasStoredSecrets: false,
     },
   );

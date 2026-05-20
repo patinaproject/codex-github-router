@@ -7,7 +7,7 @@ import type { SetupTarget } from "../src/setup.js";
 type Cancelled = "cancelled";
 type SettingsChoice = "repositories" | "organizations" | "finish";
 type TargetChoice = string | "back";
-type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "back";
+type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "set-issue-label" | "set-issue-prompt" | "back";
 
 function createTestSetupPrompts({
   repositories = [],
@@ -15,6 +15,7 @@ function createTestSetupPrompts({
   settings = ["finish"],
   targets = [],
   targetSettings = [],
+  textValues = [],
   events,
 }: {
   repositories?: SetupTarget[] | Cancelled;
@@ -22,11 +23,13 @@ function createTestSetupPrompts({
   settings?: Array<SettingsChoice | Cancelled>;
   targets?: Array<TargetChoice | Cancelled>;
   targetSettings?: Array<TargetSettingChoice | Cancelled>;
+  textValues?: Array<string | Cancelled>;
   events: string[];
 }) {
   const settingsQueue = [...settings];
   const targetQueue = [...targets];
   const targetSettingsQueue = [...targetSettings];
+  const textQueue = [...textValues];
   return {
     intro(message: string) {
       events.push(`intro:${message}`);
@@ -48,6 +51,11 @@ function createTestSetupPrompts({
     async selectTargetSetting({ title }: { title: string }) {
       const next = targetSettingsQueue.shift() ?? "back";
       events.push(`target-setting:${title}:${next}`);
+      return next;
+    },
+    async text({ message, initialValue }: { message: string; initialValue: string }) {
+      const next = textQueue.shift() ?? initialValue;
+      events.push(`text:${message}:${initialValue}:${next}`);
       return next;
     },
     note({ title, message }: { title: string; message: string }) {
@@ -72,7 +80,8 @@ test("interactive setup selects repositories and organizations with Clack prompt
     organizations: [{ id: "owner", label: "owner" }],
     settings: ["organizations", "repositories", "finish"],
     targets: ["owner", "back", "owner/one", "back"],
-    targetSettings: ["toggle-issue-automation", "back", "toggle-enabled", "back"],
+    targetSettings: ["toggle-issue-automation", "set-issue-label", "set-issue-prompt", "back", "toggle-enabled", "back"],
+    textValues: ["ready-for-codex", "Use TDD and open a draft PR."],
     events,
   });
 
@@ -94,8 +103,20 @@ test("interactive setup selects repositories and organizations with Clack prompt
   });
 
   assert.deepEqual(result, {
-    repositories: [{ fullName: "owner/one", enabled: false, issueAutomationEnabled: false }],
-    organizations: [{ login: "owner", enabled: true, issueAutomationEnabled: true }],
+    repositories: [{
+      fullName: "owner/one",
+      enabled: false,
+      issueAutomationEnabled: false,
+      issueAutomationLabel: "ready-for-agent",
+      issueAutomationPrompt: "Develop this issue using TDD, open a pull request, and report verification steps.",
+    }],
+    organizations: [{
+      login: "owner",
+      enabled: true,
+      issueAutomationEnabled: true,
+      issueAutomationLabel: "ready-for-codex",
+      issueAutomationPrompt: "Use TDD and open a draft PR.",
+    }],
     setupRequired: false,
   });
   assert.deepEqual(events, [
@@ -105,6 +126,10 @@ test("interactive setup selects repositories and organizations with Clack prompt
     "select:organizations",
     "target:Organization-level settings:owner",
     "target-setting:owner:toggle-issue-automation",
+    "target-setting:owner:set-issue-label",
+    "text:Issue automation label:ready-for-agent:ready-for-codex",
+    "target-setting:owner:set-issue-prompt",
+    "text:Issue automation prompt:Develop this issue using TDD, open a pull request, and report verification steps.:Use TDD and open a draft PR.",
     "target-setting:owner:back",
     "target:Organization-level settings:back",
     "select:repositories",

@@ -105,6 +105,8 @@ function sanitizeTargets(targets: unknown[] | undefined): unknown[] {
     if (typeof record.hookId === "number" || typeof record.hookId === "string") sanitized.hookId = record.hookId;
     if (typeof record.enabled === "boolean") sanitized.enabled = record.enabled;
     if (typeof record.issueAutomationEnabled === "boolean") sanitized.issueAutomationEnabled = record.issueAutomationEnabled;
+    if (typeof record.issueAutomationLabel === "string") sanitized.issueAutomationLabel = record.issueAutomationLabel;
+    if (typeof record.issueAutomationPrompt === "string") sanitized.issueAutomationPrompt = record.issueAutomationPrompt;
     return sanitized;
   });
 }

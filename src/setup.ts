@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { cancel, intro, isCancel, multiselect, note, outro, select } from "@clack/prompts";
+import { cancel, intro, isCancel, multiselect, note, outro, select, text } from "@clack/prompts";
 import type { RuntimeContext } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const CANCELLED = "cancelled";
+const DEFAULT_ISSUE_AUTOMATION_LABEL = "ready-for-agent";
+const DEFAULT_ISSUE_AUTOMATION_PROMPT = "Develop this issue using TDD, open a pull request, and report verification steps.";
 export const SETUP_TITLE = String.raw`
 C Y B E R P U N K   G I T H U B    R O U T I N G   C O N S O L E
 
@@ -22,8 +24,8 @@ export interface SetupTarget {
 }
 
 export interface SetupSelection {
-  repositories: Array<{ fullName: string; enabled: boolean; issueAutomationEnabled: boolean }>;
-  organizations: Array<{ login: string; enabled: boolean; issueAutomationEnabled: boolean }>;
+  repositories: Array<{ fullName: string; enabled: boolean; issueAutomationEnabled: boolean; issueAutomationLabel: string; issueAutomationPrompt: string }>;
+  organizations: Array<{ login: string; enabled: boolean; issueAutomationEnabled: boolean; issueAutomationLabel: string; issueAutomationPrompt: string }>;
   setupRequired: boolean;
 }
 
@@ -36,8 +38,8 @@ type SetupContext = Pick<RuntimeContext, "stdin" | "stdout" | "stderr" | "env">;
 type Cancelled = typeof CANCELLED;
 type SettingsChoice = "organizations" | "repositories" | "finish";
 type TargetChoice = string | "back";
-type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "back";
-type ConfiguredTarget = SetupTarget & { enabled: boolean; issueAutomationEnabled: boolean };
+type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "set-issue-label" | "set-issue-prompt" | "back";
+type ConfiguredTarget = SetupTarget & { enabled: boolean; issueAutomationEnabled: boolean; issueAutomationLabel: string; issueAutomationPrompt: string };
 
 interface SetupPromptAdapter {
   intro(message: string, context: SetupContext): void;
@@ -45,6 +47,7 @@ interface SetupPromptAdapter {
   selectSettings(args: { context: SetupContext; finishLabel: string }): Promise<SettingsChoice | Cancelled>;
   selectTarget(args: { title: string; targets: ConfiguredTarget[]; context: SetupContext }): Promise<TargetChoice | Cancelled>;
   selectTargetSetting(args: { title: string; target: ConfiguredTarget; context: SetupContext }): Promise<TargetSettingChoice | Cancelled>;
+  text(args: { message: string; initialValue: string; context: SetupContext }): Promise<string | Cancelled>;
   note(args: { title: string; message: string; context: SetupContext }): void;
   outro(message: string, context: SetupContext): void;
   cancel(message: string, context: SetupContext): void;
@@ -122,11 +125,15 @@ export async function runInteractiveSetup({
       fullName: target.id,
       enabled: target.enabled,
       issueAutomationEnabled: target.issueAutomationEnabled,
+      issueAutomationLabel: target.issueAutomationLabel,
+      issueAutomationPrompt: target.issueAutomationPrompt,
     })),
     organizations: configuredOrganizations.map((target) => ({
       login: target.id,
       enabled: target.enabled,
       issueAutomationEnabled: target.issueAutomationEnabled,
+      issueAutomationLabel: target.issueAutomationLabel,
+      issueAutomationPrompt: target.issueAutomationPrompt,
     })),
     setupRequired: false,
   };
@@ -152,12 +159,16 @@ export async function runInteractiveSettings({
     label: organization.login,
     enabled: organization.enabled,
     issueAutomationEnabled: organization.issueAutomationEnabled,
+    issueAutomationLabel: organization.issueAutomationLabel,
+    issueAutomationPrompt: organization.issueAutomationPrompt,
   }));
   const configuredRepositories = selection.repositories.map((repository) => ({
     id: repository.fullName,
     label: repository.fullName,
     enabled: repository.enabled,
     issueAutomationEnabled: repository.issueAutomationEnabled,
+    issueAutomationLabel: repository.issueAutomationLabel,
+    issueAutomationPrompt: repository.issueAutomationPrompt,
   }));
   const completed = await settingsMenu({
     repositories: configuredRepositories,
@@ -177,11 +188,15 @@ export async function runInteractiveSettings({
       fullName: target.id,
       enabled: target.enabled,
       issueAutomationEnabled: target.issueAutomationEnabled,
+      issueAutomationLabel: target.issueAutomationLabel,
+      issueAutomationPrompt: target.issueAutomationPrompt,
     })),
     organizations: configuredOrganizations.map((target) => ({
       login: target.id,
       enabled: target.enabled,
       issueAutomationEnabled: target.issueAutomationEnabled,
+      issueAutomationLabel: target.issueAutomationLabel,
+      issueAutomationPrompt: target.issueAutomationPrompt,
     })),
     setupRequired: selection.setupRequired,
   };
@@ -192,6 +207,8 @@ function configureTargets(targets: SetupTarget[]): ConfiguredTarget[] {
     ...target,
     enabled: true,
     issueAutomationEnabled: false,
+    issueAutomationLabel: DEFAULT_ISSUE_AUTOMATION_LABEL,
+    issueAutomationPrompt: DEFAULT_ISSUE_AUTOMATION_PROMPT,
   }));
 }
 
@@ -274,6 +291,22 @@ async function editTargetSettings({
       target.enabled = !target.enabled;
     } else if (choice === "toggle-issue-automation") {
       target.issueAutomationEnabled = !target.issueAutomationEnabled;
+    } else if (choice === "set-issue-label") {
+      const label = await prompts.text({
+        message: "Issue automation label",
+        initialValue: target.issueAutomationLabel,
+        context,
+      });
+      if (label === CANCELLED) return false;
+      target.issueAutomationLabel = label.trim() || DEFAULT_ISSUE_AUTOMATION_LABEL;
+    } else if (choice === "set-issue-prompt") {
+      const prompt = await prompts.text({
+        message: "Issue automation prompt",
+        initialValue: target.issueAutomationPrompt,
+        context,
+      });
+      if (prompt === CANCELLED) return false;
+      target.issueAutomationPrompt = prompt.trim() || DEFAULT_ISSUE_AUTOMATION_PROMPT;
     }
   }
 }
@@ -328,7 +361,7 @@ const clackPrompts: SetupPromptAdapter = {
         ...targets.map((target) => ({
           value: target.id,
           label: target.label,
-          hint: `${target.enabled ? "webhooks on" : "webhooks off"}, issue automation ${target.issueAutomationEnabled ? "on" : "off"}`,
+          hint: `${target.enabled ? "webhooks on" : "webhooks off"}, issue automation ${target.issueAutomationEnabled ? "on" : "off"}, label ${target.issueAutomationLabel}`,
         })),
         { value: "back", label: "Back to settings" },
       ],
@@ -352,6 +385,16 @@ const clackPrompts: SetupPromptAdapter = {
           label: `${target.issueAutomationEnabled ? "Disable" : "Enable"} issue automation`,
           hint: target.issueAutomationEnabled ? "currently enabled" : "currently disabled",
         },
+        {
+          value: "set-issue-label",
+          label: "Set issue automation label",
+          hint: target.issueAutomationLabel,
+        },
+        {
+          value: "set-issue-prompt",
+          label: "Set issue automation prompt",
+          hint: target.issueAutomationPrompt,
+        },
         { value: "back", label: "Back to targets" },
       ],
       input: context.stdin,
@@ -359,6 +402,16 @@ const clackPrompts: SetupPromptAdapter = {
     });
     if (isCancel(choice)) return CANCELLED;
     return choice;
+  },
+  async text({ message, initialValue, context }) {
+    const value = await text({
+      message,
+      initialValue,
+      input: context.stdin,
+      output: context.stdout,
+    });
+    if (isCancel(value)) return CANCELLED;
+    return value;
   },
   note({ title, message, context }) {
     note(message, title, { output: context.stdout });
