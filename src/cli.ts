@@ -120,7 +120,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
           env: context.env,
         });
         if (result.delivered) {
-          context.stderr.write(`Delivered ${event} delivery ${deliveryId ?? "unknown"} to Codex thread ${result.threadId}.\n`);
+          context.stderr.write(`Started Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"}.\n`);
         } else {
           context.stderr.write(`Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${result.reason ?? "unknown reason"}.\n`);
         }
