@@ -6,13 +6,13 @@ import type { RuntimeContext } from "./types.js";
 const execFileAsync = promisify(execFile);
 const CANCELLED = "cancelled";
 const SETUP_TITLE = String.raw`
-   ______          __             ____             __
-  / ____/___  ____/ /__  _  __   / __ \____  __  __/ /____  _____
- / /   / __ \/ __  / _ \| |/_/  / /_/ / __ \/ / / / __/ _ \/ ___/
-/ /___/ /_/ / /_/ /  __/>  <   / _, _/ /_/ / /_/ / /_/  __/ /
-\____/\____/\__,_/\___/_/|_|  /_/ |_|\____/\__,_/\__/\___/_/
-
-GitHub Router // Night Shift
+=====================================================
+||                                                 ||
+||           Codex-GitHub-Router                  ||
+||                                                 ||
+||        PR signal mixer // night shift           ||
+||_________________________________________________||
+|___________________________________________________|
 `;
 
 export interface SetupTarget {
