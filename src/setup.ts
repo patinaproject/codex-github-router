@@ -9,7 +9,6 @@ const DEFAULT_ISSUE_AUTOMATION_LABEL = "ready-for-agent";
 const DEFAULT_ISSUE_AUTOMATION_PROMPT = "Develop this issue using TDD, open a pull request, and report verification steps.";
 export const SETUP_TITLE = [
   "C Y B E R P U N K   E V E N T    R O U T I N G   T E R M I N A L",
-  "",
   "                  __                   _ __  __          __                  __  _           ",
   "  _________  ____/ /__  _  __   ____ _(_) /_/ /_  __  __/ /_     ____ ______/ /_(_)___  ____ ",
   " / ___/ __ \\/ __  / _ \\| |/_/  / __ `/ / __/ __ \\/ / / / __ \\   / __ `/ ___/ __/ / __ \\/ __ \\",
