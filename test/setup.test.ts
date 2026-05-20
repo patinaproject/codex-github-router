@@ -204,3 +204,47 @@ test("interactive setup cancellation keeps setup required", async () => {
     "cancel:Setup cancelled. Run codex-github-router again to finish setup.",
   ]);
 });
+
+test("settings cancellation navigates back instead of cancelling setup", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  const events: string[] = [];
+  const result = await runInteractiveSetup({
+    context: {
+      stdin,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      env: {},
+    },
+    discoverTargets: async () => ({
+      repositories: [],
+      organizations: [{ id: "owner", label: "owner" }],
+    }),
+    discoverRepositoriesForOrganizations: async () => [{ id: "owner/one", label: "owner/one" }],
+    prompts: createTestSetupPrompts({
+      organizations: [{ id: "owner", label: "owner" }],
+      repositories: [],
+      settings: ["organizations", "finish"],
+      targets: ["owner"],
+      targetSettings: ["set-issue-prompt", "cancelled", "cancelled"],
+      textValues: ["cancelled"],
+      events,
+    }),
+  });
+
+  assert.equal(result.setupRequired, false);
+  assert.equal(result.organizations[0]?.issueAutomationPrompt, "Develop this issue using TDD, open a pull request, and report verification steps.");
+  assert.deepEqual(events, [
+    "intro:Interactive setup",
+    "multiselect:Select organizations for organization webhooks",
+    "multiselect:Select repositories for repository webhooks",
+    "select:organizations",
+    "target:Organization-level settings:owner",
+    "target-setting:owner:set-issue-prompt",
+    "text:Issue automation prompt:Develop this issue using TDD, open a pull request, and report verification steps.:cancelled",
+    "target-setting:owner:cancelled",
+    "target:Organization-level settings:back",
+    "select:finish",
+    "outro:Setup saved. Starting router...",
+  ]);
+});

@@ -96,3 +96,27 @@ test("does not write a readline prompt", () => {
   assert.match(output, /\[R\] Reload webhooks  \[S\] Settings  \[Q\] Quit/);
   assert.doesNotMatch(output, />/);
 });
+
+test("reprints runtime hint after settings closes", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  stdin.setRawMode = () => stdin;
+  const stdout = new PassThrough();
+  let output = "";
+  stdout.on("data", (chunk) => {
+    output += chunk.toString("utf8");
+  });
+
+  attachRuntimeCommands({
+    stdin,
+    stdout,
+    onReload() {},
+    onSettings() {},
+    onQuit() {},
+  });
+
+  stdin.write("S");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(output.match(/\[R\] Reload webhooks  \[S\] Settings  \[Q\] Quit/g)?.length, 2);
+});

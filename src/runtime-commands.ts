@@ -17,7 +17,11 @@ export function attachRuntimeCommands({
     return { enabled: false, close() {} };
   }
 
-  stdout.write("[R] Reload webhooks  [S] Settings  [Q] Quit\n");
+  function writeHint(): void {
+    stdout.write("[R] Reload webhooks  [S] Settings  [Q] Quit\n");
+  }
+
+  writeHint();
   const previousRawMode = typeof stdin.isRaw === "boolean" ? stdin.isRaw : false;
   const setRawMode = typeof stdin.setRawMode === "function" ? (value: boolean) => stdin.setRawMode?.(value) : undefined;
   let listening = false;
@@ -47,6 +51,9 @@ export function attachRuntimeCommands({
       await callback();
     } finally {
       startListening();
+      if (!closed) {
+        writeHint();
+      }
     }
   }
 

@@ -276,7 +276,7 @@ async function settingsMenu({
 }): Promise<boolean> {
   while (true) {
     const choice = await prompts.selectSettings({ context, finishLabel });
-    if (choice === CANCELLED) return false;
+    if (choice === CANCELLED) return true;
     if (choice === "organizations") {
       const completed = await targetSettingsMenu({
         title: "Organization-level settings",
@@ -312,12 +312,11 @@ async function targetSettingsMenu({
 }): Promise<boolean> {
   while (true) {
     const targetId = await prompts.selectTarget({ title, targets, context });
-    if (targetId === CANCELLED) return false;
+    if (targetId === CANCELLED) return true;
     if (targetId === "back") return true;
     const target = targets.find((candidate) => candidate.id === targetId);
     if (!target) continue;
     const completed = await editTargetSettings({ title: target.label, target, context, prompts });
-    if (!completed) return false;
   }
 }
 
@@ -334,7 +333,7 @@ async function editTargetSettings({
 }): Promise<boolean> {
   while (true) {
     const choice = await prompts.selectTargetSetting({ title, target, context });
-    if (choice === CANCELLED) return false;
+    if (choice === CANCELLED) return true;
     if (choice === "back") return true;
     if (choice === "toggle-enabled") {
       target.enabled = !target.enabled;
@@ -346,7 +345,7 @@ async function editTargetSettings({
         initialValue: target.issueAutomationLabel,
         context,
       });
-      if (label === CANCELLED) return false;
+      if (label === CANCELLED) continue;
       target.issueAutomationLabel = label.trim() || DEFAULT_ISSUE_AUTOMATION_LABEL;
     } else if (choice === "set-issue-prompt") {
       const prompt = await prompts.text({
@@ -354,7 +353,7 @@ async function editTargetSettings({
         initialValue: target.issueAutomationPrompt,
         context,
       });
-      if (prompt === CANCELLED) return false;
+      if (prompt === CANCELLED) continue;
       target.issueAutomationPrompt = prompt.trim() || DEFAULT_ISSUE_AUTOMATION_PROMPT;
     }
   }
