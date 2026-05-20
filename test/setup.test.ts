@@ -80,13 +80,17 @@ test("interactive setup selects repositories and organizations with Clack prompt
   });
   assert.deepEqual(events, [
     `intro:
-=====================================================
-||                                                 ||
-||           Codex-GitHub-Router                  ||
-||                                                 ||
-||        PR signal mixer // night shift           ||
-||_________________________________________________||
-|___________________________________________________|
+   ____  ___  ____  ____  _  _        ____  __  ____  _  _  _  _  ____
+  / ___)/ __)(    \\(  __)( \\/ )      / ___)(  )(_  _)/ )( \\( \\/ )(  _ \\
+ ( (__ ( (__  ) D ( ) _)  )  / _____( (_ \\  )(   )(  ) __ ( )  /  ) _ (
+  \\___) \\___)(____/(____)(_/\\_)(_____)\\___/ (__) (__) \\_)(_/(_/\\_)(____/
+
+      ____   __   _  _  ____  ____  ____
+     (  _ \\ /  \\ / )( \\(_  _)(  __)(  _ \\
+      )   /(  O )) \\/ (  )(   ) _)  )   /
+     (__\\_) \\__/ \\____/ (__) (____)(__\\_)
+
+             Codex-GitHub-Router // night shift
 `,
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
