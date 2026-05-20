@@ -1,4 +1,5 @@
 import http from "node:http";
+import { isAllowedGitHubEvent } from "./github-events.js";
 import { DEFAULT_WEBHOOK_PATH } from "./url.js";
 import { verifyGitHubSignature } from "./security.js";
 import type { DeliveryCache } from "./dedupe-cache.js";
@@ -81,6 +82,11 @@ export function createWebhookServer({
       }
 
       const event = headerValue(request.headers["x-github-event"]) ?? "unknown";
+      if (!isAllowedGitHubEvent(event)) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: { code: "unsupported_event" } }));
+        return;
+      }
       const payload = parsePayload(body);
       await onEvent?.({ event, deliveryId, payload });
       if (deliveryId) {

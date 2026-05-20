@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { GITHUB_WEBHOOK_EVENTS } from "./github-events.js";
 import { generateWebhookSecret } from "./security.js";
 import type { RouterConfig } from "./types.js";
 
 const execFileAsync = promisify(execFile);
-const WEBHOOK_EVENTS = ["issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment"];
 
 export interface WebhookSyncResult {
   repositories: Array<{ fullName: string; hookId: number | string; action: "created" | "updated" }>;
@@ -172,7 +172,7 @@ function webhookFields(publicWebhookUrl: string, secret: string): string[] {
     "-f", "config[content_type]=json",
     "-f", `config[secret]=${secret}`,
     "-f", "config[insecure_ssl]=0",
-    ...WEBHOOK_EVENTS.flatMap((event) => ["-f", `events[]=${event}`]),
+    ...GITHUB_WEBHOOK_EVENTS.flatMap((event) => ["-f", `events[]=${event}`]),
   ];
 }
 

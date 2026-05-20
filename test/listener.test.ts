@@ -49,6 +49,24 @@ test("rejects unsigned webhook payloads outside localhost mode", async () => {
   }
 });
 
+test("rejects unsupported GitHub event types", async () => {
+  const body = "{}";
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-event": "ping",
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { ok: false, error: { code: "unsupported_event" } });
+  } finally {
+    server.close();
+  }
+});
+
 test("deduplicates repeated delivery IDs", async () => {
   const body = "{}";
   const cache = new DeliveryCache();
@@ -58,7 +76,7 @@ test("deduplicates repeated delivery IDs", async () => {
   });
   const address = await listen(server);
   try {
-    const headers = { "x-github-delivery": "delivery-1" };
+    const headers = { "x-github-delivery": "delivery-1", "x-github-event": "issues" };
     assert.equal((await postJson(address, body, headers)).status, 202);
     const second = await postJson(address, body, headers);
     assert.equal(second.status, 202);
@@ -82,7 +100,7 @@ test("does not cache delivery IDs when event routing fails", async () => {
   });
   const address = await listen(server);
   try {
-    const headers = { "x-github-delivery": "delivery-1" };
+    const headers = { "x-github-delivery": "delivery-1", "x-github-event": "issues" };
     assert.equal((await postJson(address, body, headers)).status, 400);
     assert.equal((await postJson(address, body, headers)).status, 400);
     assert.equal(attempts, 2);
