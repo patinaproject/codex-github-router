@@ -16,10 +16,12 @@
   },
   "scripts": {
     "prepare": "husky",
+    "postinstall": "bash scripts/install-third-party-skills.sh",
     "commit": "git-cz",
     "commit:retry": "git-cz --retry",
     "commitlint": "commitlint",
-    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\""
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#skills/**\" \"#.agents/skills/**\" \"#.claude/skills/**\"",
+    "skills:restore": "bash scripts/install-third-party-skills.sh"
   },
   "config": {
     "commitizen": {

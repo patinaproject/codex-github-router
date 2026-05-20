@@ -2,6 +2,7 @@ node_modules/
 
 # Project-local agent skills installed by external tooling stay local unless
 # this repository intentionally starts owning first-party skills.
+skills/
 .agents/skills/
 .claude/skills/
 
