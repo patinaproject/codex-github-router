@@ -19,9 +19,15 @@ test("handles reload, settings, and quit commands case-insensitively", async () 
   const stdin = new PassThrough();
   stdin.isTTY = true;
   let rawMode: boolean | undefined;
+  let paused = false;
   stdin.setRawMode = (value: boolean) => {
     rawMode = value;
     return stdin;
+  };
+  const originalPause = stdin.pause.bind(stdin);
+  stdin.pause = () => {
+    paused = true;
+    return originalPause();
   };
   const stdout = new PassThrough();
   let reloads = 0;
@@ -41,8 +47,30 @@ test("handles reload, settings, and quit commands case-insensitively", async () 
 
   assert.equal(runtime.enabled, true);
   assert.equal(rawMode, false);
+  assert.equal(paused, true);
   assert.equal(reloads, 1);
   assert.equal(settings, 1);
+  assert.equal(quits, 1);
+});
+
+test("quit closes only once even if Q is repeated", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  stdin.setRawMode = () => stdin;
+  const stdout = new PassThrough();
+  let quits = 0;
+
+  attachRuntimeCommands({
+    stdin,
+    stdout,
+    onReload() {},
+    onSettings() {},
+    onQuit: async () => { quits += 1; },
+  });
+
+  stdin.write("QQQ");
+  await new Promise((resolve) => setImmediate(resolve));
+
   assert.equal(quits, 1);
 });
 

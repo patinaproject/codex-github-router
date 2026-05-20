@@ -38,10 +38,16 @@ export function attachRuntimeCommands({
     }
   };
   stdin.on("data", onData);
+  let closed = false;
 
   function close(): void {
+    if (closed) {
+      return;
+    }
+    closed = true;
     stdin.off("data", onData);
     setRawMode?.(previousRawMode);
+    stdin.pause();
   }
 
   return { enabled: true, close };
