@@ -9,7 +9,7 @@ const DEFAULT_ISSUE_AUTOMATION_LABEL = "ready-for-agent";
 const DEFAULT_ISSUE_AUTOMATION_PROMPT = "Develop this issue using TDD, open a pull request, and report verification steps.";
 export const SETUP_TITLE = [
   "",
-  "C Y B E R P U N K    E V E N T    R O U T I N G    A C T I O N",
+  "               C Y B E R P U N K    E V E N T    R O U T I N G    A C T I O N",
   "                  __                   _ __  __          __                        __           ",
   "  _________  ____/ /__  _  __   ____ _(_) /_/ /_  __  __/ /_     _________  __  __/ /____  _____",
   " / ___/ __ \\/ __  / _ \\| |/_/  / __ `/ / __/ __ \\/ / / / __ \\   / ___/ __ \\/ / / / __/ _ \\/ ___/",
@@ -40,6 +40,7 @@ type Cancelled = typeof CANCELLED;
 type SettingsChoice = "organizations" | "repositories" | "finish";
 type TargetChoice = string | "back";
 type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "set-issue-label" | "set-issue-prompt" | "back";
+type MenuResult = "finish" | "back";
 type ConfiguredTarget = SetupTarget & { enabled: boolean; issueAutomationEnabled: boolean; issueAutomationLabel: string; issueAutomationPrompt: string };
 
 interface SetupPromptAdapter {
@@ -100,65 +101,74 @@ export async function runInteractiveSetup({
     return { repositories: [], organizations: [], setupRequired: true };
   }
 
-  prompts.intro("Interactive setup", context);
+  prompts.intro("Commencing simulation . . .", context);
 
   const targets = await discoverTargets();
-  const selectedOrganizations = await prompts.multiselectTargets({
-    message: "Select organizations for organization webhooks",
-    items: targets.organizations,
-    context,
-  });
-  if (selectedOrganizations === CANCELLED) {
-    return cancelSetup(prompts, context);
-  }
-  const availableRepositories = uniqueTargets([
-    ...targets.repositories,
-    ...await discoverRepositoriesForOrganizations(selectedOrganizations),
-  ]);
+  let selectedOrganizations: SetupTarget[] | null = null;
 
-  const selectedRepositories = await prompts.multiselectTargets({
-    message: "Select repositories for repository webhooks",
-    items: availableRepositories,
-    context,
-  });
-  if (selectedRepositories === CANCELLED) {
-    return cancelSetup(prompts, context);
-  }
+  while (true) {
+    if (selectedOrganizations === null) {
+      const organizationSelection = await prompts.multiselectTargets({
+        message: "Select organizations for organization webhooks",
+        items: targets.organizations,
+        context,
+      });
+      if (organizationSelection === CANCELLED) {
+        return cancelSetup(prompts, context);
+      }
+      selectedOrganizations = organizationSelection;
+    }
 
-  const configuredOrganizations = configureTargets(selectedOrganizations);
-  const configuredRepositories = configureTargets(repositorySettingsTargets({
-    selectedRepositories,
-    selectedOrganizations,
-    availableRepositories,
-  }));
-  const completed = await settingsMenu({
-    repositories: configuredRepositories,
-    organizations: configuredOrganizations,
-    context,
-    prompts,
-  });
-  if (!completed) {
-    return cancelSetup(prompts, context);
-  }
-  prompts.outro("Setup saved. Starting router...", context);
+    const availableRepositories = uniqueTargets([
+      ...targets.repositories,
+      ...await discoverRepositoriesForOrganizations(selectedOrganizations),
+    ]);
 
-  return {
-    repositories: configuredRepositories.map((target) => ({
-      fullName: target.id,
-      enabled: target.enabled,
-      issueAutomationEnabled: target.issueAutomationEnabled,
-      issueAutomationLabel: target.issueAutomationLabel,
-      issueAutomationPrompt: target.issueAutomationPrompt,
-    })),
-    organizations: configuredOrganizations.map((target) => ({
-      login: target.id,
-      enabled: target.enabled,
-      issueAutomationEnabled: target.issueAutomationEnabled,
-      issueAutomationLabel: target.issueAutomationLabel,
-      issueAutomationPrompt: target.issueAutomationPrompt,
-    })),
-    setupRequired: false,
-  };
+    const selectedRepositories = await prompts.multiselectTargets({
+      message: "Select repositories for repository webhooks",
+      items: availableRepositories,
+      context,
+    });
+    if (selectedRepositories === CANCELLED) {
+      selectedOrganizations = null;
+      continue;
+    }
+
+    const configuredOrganizations = configureTargets(selectedOrganizations);
+    const configuredRepositories = configureTargets(repositorySettingsTargets({
+      selectedRepositories,
+      selectedOrganizations,
+      availableRepositories,
+    }));
+    const menuResult = await settingsMenu({
+      repositories: configuredRepositories,
+      organizations: configuredOrganizations,
+      context,
+      prompts,
+    });
+    if (menuResult === "back") {
+      continue;
+    }
+    prompts.outro("Setup saved. Starting router...", context);
+
+    return {
+      repositories: configuredRepositories.map((target) => ({
+        fullName: target.id,
+        enabled: target.enabled,
+        issueAutomationEnabled: target.issueAutomationEnabled,
+        issueAutomationLabel: target.issueAutomationLabel,
+        issueAutomationPrompt: target.issueAutomationPrompt,
+      })),
+      organizations: configuredOrganizations.map((target) => ({
+        login: target.id,
+        enabled: target.enabled,
+        issueAutomationEnabled: target.issueAutomationEnabled,
+        issueAutomationLabel: target.issueAutomationLabel,
+        issueAutomationPrompt: target.issueAutomationPrompt,
+      })),
+      setupRequired: false,
+    };
+  }
 }
 
 export async function runInteractiveSettings({
@@ -192,14 +202,14 @@ export async function runInteractiveSettings({
     issueAutomationLabel: repository.issueAutomationLabel,
     issueAutomationPrompt: repository.issueAutomationPrompt,
   }));
-  const completed = await settingsMenu({
+  const menuResult = await settingsMenu({
     repositories: configuredRepositories,
     organizations: configuredOrganizations,
     context,
     prompts,
     finishLabel: "Save settings",
   });
-  if (!completed) {
+  if (menuResult === "back") {
     prompts.cancel("Settings cancelled. Existing settings were kept.", context);
     return null;
   }
@@ -274,28 +284,26 @@ async function settingsMenu({
   context: SetupContext;
   prompts: SetupPromptAdapter;
   finishLabel?: string;
-}): Promise<boolean> {
+}): Promise<MenuResult> {
   while (true) {
     const choice = await prompts.selectSettings({ context, finishLabel });
-    if (choice === CANCELLED) return true;
+    if (choice === CANCELLED) return "back";
     if (choice === "organizations") {
-      const completed = await targetSettingsMenu({
+      await targetSettingsMenu({
         title: "Organization-level settings",
         targets: organizations,
         context,
         prompts,
       });
-      if (!completed) return false;
     } else if (choice === "repositories") {
-      const completed = await targetSettingsMenu({
+      await targetSettingsMenu({
         title: "Repository-level settings",
         targets: repositories,
         context,
         prompts,
       });
-      if (!completed) return false;
     } else {
-      return true;
+      return "finish";
     }
   }
 }
@@ -310,14 +318,14 @@ async function targetSettingsMenu({
   targets: ConfiguredTarget[];
   context: SetupContext;
   prompts: SetupPromptAdapter;
-}): Promise<boolean> {
+}): Promise<MenuResult> {
   while (true) {
     const targetId = await prompts.selectTarget({ title, targets, context });
-    if (targetId === CANCELLED) return true;
-    if (targetId === "back") return true;
+    if (targetId === CANCELLED) return "back";
+    if (targetId === "back") return "back";
     const target = targets.find((candidate) => candidate.id === targetId);
     if (!target) continue;
-    const completed = await editTargetSettings({ title: target.label, target, context, prompts });
+    await editTargetSettings({ title: target.label, target, context, prompts });
   }
 }
 
@@ -331,11 +339,11 @@ async function editTargetSettings({
   target: ConfiguredTarget;
   context: SetupContext;
   prompts: SetupPromptAdapter;
-}): Promise<boolean> {
+}): Promise<MenuResult> {
   while (true) {
     const choice = await prompts.selectTargetSetting({ title, target, context });
-    if (choice === CANCELLED) return true;
-    if (choice === "back") return true;
+    if (choice === CANCELLED) return "back";
+    if (choice === "back") return "back";
     if (choice === "toggle-enabled") {
       target.enabled = !target.enabled;
     } else if (choice === "toggle-issue-automation") {

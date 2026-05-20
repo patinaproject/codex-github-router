@@ -12,6 +12,8 @@ type TargetSettingChoice = "toggle-enabled" | "toggle-issue-automation" | "set-i
 function createTestSetupPrompts({
   repositories = [],
   organizations = [],
+  repositorySelections,
+  organizationSelections,
   settings = ["finish"],
   targets = [],
   targetSettings = [],
@@ -20,6 +22,8 @@ function createTestSetupPrompts({
 }: {
   repositories?: SetupTarget[] | Cancelled;
   organizations?: SetupTarget[] | Cancelled;
+  repositorySelections?: Array<SetupTarget[] | Cancelled>;
+  organizationSelections?: Array<SetupTarget[] | Cancelled>;
   settings?: Array<SettingsChoice | Cancelled>;
   targets?: Array<TargetChoice | Cancelled>;
   targetSettings?: Array<TargetSettingChoice | Cancelled>;
@@ -30,13 +34,18 @@ function createTestSetupPrompts({
   const targetQueue = [...targets];
   const targetSettingsQueue = [...targetSettings];
   const textQueue = [...textValues];
+  const repositorySelectionQueue = repositorySelections ? [...repositorySelections] : null;
+  const organizationSelectionQueue = organizationSelections ? [...organizationSelections] : null;
   return {
     intro(message: string) {
       events.push(`intro:${message}`);
     },
     async multiselectTargets({ message }: { message: string }) {
       events.push(`multiselect:${message}`);
-      return message.includes("repositories") ? repositories : organizations;
+      if (message.includes("repositories")) {
+        return repositorySelectionQueue?.shift() ?? repositories;
+      }
+      return organizationSelectionQueue?.shift() ?? organizations;
     },
     async selectSettings() {
       const next = settingsQueue.shift() ?? "finish";
@@ -130,7 +139,7 @@ test("interactive setup selects repositories and organizations with Clack prompt
     setupRequired: false,
   });
   assert.deepEqual(events, [
-    "intro:Interactive setup",
+    "intro:Commencing simulation . . .",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:organizations",
@@ -199,7 +208,7 @@ test("interactive setup cancellation keeps setup required", async () => {
     setupRequired: true,
   });
   assert.deepEqual(events, [
-    "intro:Interactive setup",
+    "intro:Commencing simulation . . .",
     "multiselect:Select organizations for organization webhooks",
     "cancel:Setup cancelled. Run codex-github-router again to finish setup.",
   ]);
@@ -235,7 +244,7 @@ test("settings cancellation navigates back instead of cancelling setup", async (
   assert.equal(result.setupRequired, false);
   assert.equal(result.organizations[0]?.issueAutomationPrompt, "Develop this issue using TDD, open a pull request, and report verification steps.");
   assert.deepEqual(events, [
-    "intro:Interactive setup",
+    "intro:Commencing simulation . . .",
     "multiselect:Select organizations for organization webhooks",
     "multiselect:Select repositories for repository webhooks",
     "select:organizations",
@@ -244,6 +253,80 @@ test("settings cancellation navigates back instead of cancelling setup", async (
     "text:Issue automation prompt:Develop this issue using TDD, open a pull request, and report verification steps.:cancelled",
     "target-setting:owner:cancelled",
     "target:Organization-level settings:back",
+    "select:finish",
+    "outro:Setup saved. Starting router...",
+  ]);
+});
+
+test("repository selection cancellation goes back to organization selection", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  const events: string[] = [];
+  const result = await runInteractiveSetup({
+    context: {
+      stdin,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      env: {},
+    },
+    discoverTargets: async () => ({
+      repositories: [{ id: "owner/one", label: "owner/one" }],
+      organizations: [{ id: "owner", label: "owner" }],
+    }),
+    discoverRepositoriesForOrganizations: async () => [],
+    prompts: createTestSetupPrompts({
+      organizationSelections: [[{ id: "owner", label: "owner" }], []],
+      repositorySelections: ["cancelled", []],
+      settings: ["finish"],
+      events,
+    }),
+  });
+
+  assert.equal(result.setupRequired, false);
+  assert.deepEqual(result.organizations, []);
+  assert.deepEqual(events, [
+    "intro:Commencing simulation . . .",
+    "multiselect:Select organizations for organization webhooks",
+    "multiselect:Select repositories for repository webhooks",
+    "multiselect:Select organizations for organization webhooks",
+    "multiselect:Select repositories for repository webhooks",
+    "select:finish",
+    "outro:Setup saved. Starting router...",
+  ]);
+});
+
+test("settings menu cancellation goes back to repository selection", async () => {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  const events: string[] = [];
+  const result = await runInteractiveSetup({
+    context: {
+      stdin,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      env: {},
+    },
+    discoverTargets: async () => ({
+      repositories: [{ id: "owner/one", label: "owner/one" }],
+      organizations: [{ id: "owner", label: "owner" }],
+    }),
+    discoverRepositoriesForOrganizations: async () => [],
+    prompts: createTestSetupPrompts({
+      organizations: [{ id: "owner", label: "owner" }],
+      repositorySelections: [[{ id: "owner/one", label: "owner/one" }], []],
+      settings: ["cancelled", "finish"],
+      events,
+    }),
+  });
+
+  assert.equal(result.setupRequired, false);
+  assert.deepEqual(result.repositories.map((repository) => repository.fullName), ["owner/one"]);
+  assert.deepEqual(events, [
+    "intro:Commencing simulation . . .",
+    "multiselect:Select organizations for organization webhooks",
+    "multiselect:Select repositories for repository webhooks",
+    "select:cancelled",
+    "multiselect:Select repositories for repository webhooks",
     "select:finish",
     "outro:Setup saved. Starting router...",
   ]);

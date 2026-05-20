@@ -6,9 +6,11 @@ import { createWebhookServer, listen } from "./listener.js";
 import { parseRouterMode } from "./mode.js";
 import { colorize, fail, ok, writeJson } from "./output.js";
 import { attachRuntimeCommands } from "./runtime-commands.js";
+import { generateWebhookSecret } from "./security.js";
 import { SETUP_TITLE, runInteractiveSettings, runInteractiveSetup } from "./setup.js";
 import { findExistingNgrokTunnel, startNgrokTunnel } from "./tunnel.js";
 import { localWebhookUrl, normalizeWebhookUrl } from "./url.js";
+import { syncGitHubWebhooks } from "./webhooks.js";
 import type { RouterOptions } from "./mode.js";
 import type { RouterConfig, RuntimeContext } from "./types.js";
 import type { SetupSelection } from "./setup.js";
@@ -76,6 +78,8 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     context.stdout.write(`${SETUP_TITLE}\n`);
   }
   const existingConfig = await readConfig({ env: context.env });
+  const envWebhookSecret = context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET;
+  const webhookSecret = envWebhookSecret ?? existingConfig?.webhookSecret ?? generateWebhookSecret();
   const firstRunSetup = mode.kind !== "localhost" && (!existingConfig || existingConfig.setupRequired);
   const setupSelection = firstRunSetup && !options.json
     ? await runInteractiveSetup({ context })
@@ -89,7 +93,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
   }
   let server = createWebhookServer({
     mode: mode.kind,
-    secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
+    secret: webhookSecret,
     deliveryCache: cache,
     onEvent: ({ event, deliveryId, payload }) => {
       const repository = payload.repository;
@@ -127,7 +131,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
           server.close();
           server = createWebhookServer({
             mode: mode.kind,
-            secret: context.env.CODEX_GITHUB_ROUTER_WEBHOOK_SECRET,
+            secret: webhookSecret,
             deliveryCache: cache,
             onEvent: ({ event, deliveryId, payload }) => {
               const repository = payload.repository;
@@ -149,7 +153,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
         attachedToExistingTunnel = true;
       }
     }
-    await writeConfig({
+    const nextConfig: RouterConfig = {
       version: 1,
       mode: mode.kind,
       localWebhookUrl: localUrl,
@@ -158,8 +162,15 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       attachedToExistingTunnel,
       repositories: setupSelection.repositories,
       organizations: setupSelection.organizations,
-      hasStoredSecrets: false,
-    }, { env: context.env });
+      hasStoredSecrets: !envWebhookSecret,
+    };
+    if (!envWebhookSecret) {
+      nextConfig.webhookSecret = webhookSecret;
+    }
+    if (mode.kind !== "localhost" && !setupSelection.setupRequired) {
+      await syncGitHubWebhooks({ config: nextConfig, publicWebhookUrl, env: context.env });
+    }
+    await writeConfig(nextConfig, { env: context.env });
     context.stdout.write(`${colorize("codex-github-router ready", "green", { env: context.env, stream: context.stdout })}\n`);
     context.stdout.write(`${colorize("local", "dim", { env: context.env, stream: context.stdout })}  ${localUrl}\n`);
     context.stdout.write(`${colorize("public", "dim", { env: context.env, stream: context.stdout })} ${publicWebhookUrl}\n`);
@@ -180,7 +191,14 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
     stdin: context.stdin,
     stdout: context.stdout,
     onReload: async () => {
-      context.stdout.write("Reload webhooks is not configured until setup stores hook IDs.\n");
+      const config = await readConfig({ env: context.env });
+      if (!config?.publicWebhookUrl) {
+        context.stdout.write("No public webhook URL is configured yet.\n");
+        return;
+      }
+      const result = await syncGitHubWebhooks({ config, publicWebhookUrl: config.publicWebhookUrl, env: context.env });
+      await writeConfig(config, { env: context.env });
+      context.stdout.write(`Reloaded webhooks: ${result.organizations.length} organizations, ${result.repositories.length} repositories.\n`);
     },
     onSettings: async () => {
       const config = await readConfig({ env: context.env });
@@ -193,12 +211,16 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
       if (!updatedSelection) {
         return;
       }
-      await writeConfig({
+      const nextConfig = {
         ...config,
         repositories: updatedSelection.repositories,
         organizations: updatedSelection.organizations,
         setupRequired: updatedSelection.setupRequired,
-      }, { env: context.env });
+      };
+      if (nextConfig.publicWebhookUrl && nextConfig.mode !== "localhost") {
+        await syncGitHubWebhooks({ config: nextConfig, publicWebhookUrl: nextConfig.publicWebhookUrl, env: context.env });
+      }
+      await writeConfig(nextConfig, { env: context.env });
     },
     onQuit: close,
   });
@@ -300,7 +322,13 @@ export async function runCli(args: string[], context: RuntimeContext): Promise<n
         writeJson(context.stdout, fail("config_missing", "Run the router once to create settings before reloading webhooks."));
         return 1;
       }
-      writeJson(context.stdout, ok({ reloaded: false, warnings: ["webhook reload requires stored hook IDs and secure credentials"] }));
+      if (!config.publicWebhookUrl) {
+        writeJson(context.stdout, fail("public_url_missing", "Run the router once with a public URL before reloading webhooks."));
+        return 1;
+      }
+      const result = await syncGitHubWebhooks({ config, publicWebhookUrl: config.publicWebhookUrl, env: context.env });
+      await writeConfig(config, { env: context.env });
+      writeJson(context.stdout, ok({ reloaded: true, ...result }));
       return 0;
     }
     if (command === "request" && subcommand === "get") {

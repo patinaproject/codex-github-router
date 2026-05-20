@@ -24,6 +24,7 @@ export interface RouterConfig {
   repositories?: unknown[];
   organizations?: unknown[];
   hasStoredSecrets?: boolean;
+  webhookSecret?: string;
 }
 
 export interface JsonObject {
