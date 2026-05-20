@@ -38,6 +38,14 @@ function parsePayload(body: Buffer): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function eventAction(payload: Record<string, unknown>): string | undefined {
+  return typeof payload.action === "string" ? payload.action : undefined;
+}
+
+function shouldIgnoreEvent(event: string, payload: Record<string, unknown>): boolean {
+  return event === "pull_request" && eventAction(payload) === "synchronize";
+}
+
 export function createWebhookServer({
   mode,
   secret,
@@ -88,6 +96,15 @@ export function createWebhookServer({
         return;
       }
       const payload = parsePayload(body);
+      if (shouldIgnoreEvent(event, payload)) {
+        if (deliveryId) {
+          deliveryCache?.add(deliveryId);
+          await deliveryCache?.save();
+        }
+        response.writeHead(202, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true, ignored: true, event, action: eventAction(payload), deliveryId }));
+        return;
+      }
       await onEvent?.({ event, deliveryId, payload });
       if (deliveryId) {
         deliveryCache?.add(deliveryId);

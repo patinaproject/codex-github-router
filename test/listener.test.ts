@@ -86,6 +86,36 @@ test("accepts GitHub ping health-check events", async () => {
   }
 });
 
+test("quietly ignores pull request synchronize events from branch pushes", async () => {
+  const body = JSON.stringify({ action: "synchronize", repository: { full_name: "owner/repo" } });
+  let routed = false;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+    onEvent: async () => {
+      routed = true;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "pull_request",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      ignored: true,
+      event: "pull_request",
+      action: "synchronize",
+      deliveryId: "delivery-1",
+    });
+    assert.equal(routed, false);
+  } finally {
+    server.close();
+  }
+});
+
 test("deduplicates repeated delivery IDs", async () => {
   const body = "{}";
   const cache = new DeliveryCache();
