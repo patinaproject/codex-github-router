@@ -88,7 +88,7 @@ test("localhost foreground output is polished and Q quits immediately", async ()
   assert.match(output().stdout, new RegExp(SETUP_TITLE.split("\n")[1] ?? "CODEX"));
   assert.match(output().stdout, /codex-github-router ready/);
   assert.doesNotMatch(output().stdout, /Press Ctrl-C to quit/);
-  assert.doesNotMatch(output().stdout, />/);
+  assert.doesNotMatch(output().stdout, /^> /m);
 });
 
 test("setup messaging triggers when existing config still requires setup", async () => {

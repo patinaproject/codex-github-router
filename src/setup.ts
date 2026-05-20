@@ -7,16 +7,16 @@ const execFileAsync = promisify(execFile);
 const CANCELLED = "cancelled";
 const DEFAULT_ISSUE_AUTOMATION_LABEL = "ready-for-agent";
 const DEFAULT_ISSUE_AUTOMATION_PROMPT = "Develop this issue using TDD, open a pull request, and report verification steps.";
-export const SETUP_TITLE = String.raw`
-C Y B E R P U N K   G I T H U B    R O U T I N G   C O N S O L E
-
-   _____  _____  ____  _____  __  __        _____  __  _____  __  __  __  __  ____
-  / ___/ / __  / / __ \ / ___/ \ \/ /       / ___/ / / /_  _/ / / / / \ \/ / / __ \
- / /__  / /_/ / / /_/ / /__    \  /  _____ / /__  / /   / /  / /_/ /   \  / / /_/ /
- \___/  \____/  \____/ \___/   /_/\_\_____\\___/ /_/   /_/   \____/   /_/\_\ \____/
-
-        C O D E X - G I T H U B - R O U T E R
-`;
+export const SETUP_TITLE = [
+  "C Y B E R P U N K   E V E N T    R O U T I N G   T E R M I N A L",
+  "",
+  "                  __                   _ __  __          __                  __  _           ",
+  "  _________  ____/ /__  _  __   ____ _(_) /_/ /_  __  __/ /_     ____ ______/ /_(_)___  ____ ",
+  " / ___/ __ \\/ __  / _ \\| |/_/  / __ `/ / __/ __ \\/ / / / __ \\   / __ `/ ___/ __/ / __ \\/ __ \\",
+  "/ /__/ /_/ / /_/ /  __/>  <   / /_/ / / /_/ / / / /_/ / /_/ /  / /_/ / /__/ /_/ / /_/ / / / /",
+  "\\___/\\____/\\__,_/\\___/_/|_|   \\__, /_/\\__/_/ /_/\\__,_/_.___/   \\__,_/\\___/\\__/_/\\____/_/ /_/ ",
+  "                             /____/                                                          ",
+].join("\n");
 
 export interface SetupTarget {
   id: string;
