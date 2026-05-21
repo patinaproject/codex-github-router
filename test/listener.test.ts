@@ -1,0 +1,268 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { DeliveryCache } from "../src/dedupe-cache.js";
+import { createWebhookServer, listen } from "../src/listener.js";
+import { signPayload } from "../src/security.js";
+
+async function postJson(address, body, headers = {}) {
+  return fetch(`http://127.0.0.1:${address.port}/webhooks/github`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body,
+  });
+}
+
+test("accepts signed webhook payloads in URL mode", async () => {
+  const body = JSON.stringify({ repository: { full_name: "owner/repo" } });
+  const secret = "test-secret";
+  const server = createWebhookServer({
+    mode: "url",
+    secret,
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-hub-signature-256": signPayload(secret, Buffer.from(body)),
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issues",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issues", deliveryId: "delivery-1" });
+  } finally {
+    server.close();
+  }
+});
+
+test("rejects unsigned webhook payloads outside localhost mode", async () => {
+  const server = createWebhookServer({
+    mode: "url",
+    secret: "test-secret",
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, "{}");
+    assert.equal(response.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
+test("rejects unsupported GitHub event types", async () => {
+  const body = "{}";
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-event": "fork",
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { ok: false, error: { code: "unsupported_event" } });
+  } finally {
+    server.close();
+  }
+});
+
+test("accepts GitHub ping health-check events", async () => {
+  const body = "{}";
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "ping",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "ping", deliveryId: "delivery-1" });
+  } finally {
+    server.close();
+  }
+});
+
+test("quietly ignores pull request lifecycle events", async () => {
+  const body = JSON.stringify({ action: "opened", repository: { full_name: "owner/repo" } });
+  let routed = false;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+    onEvent: async () => {
+      routed = true;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "pull_request",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      ignored: true,
+      event: "pull_request",
+      action: "opened",
+      deliveryId: "delivery-1",
+    });
+    assert.equal(routed, false);
+  } finally {
+    server.close();
+  }
+});
+
+test("deduplicates repeated delivery IDs", async () => {
+  const body = "{}";
+  const cache = new DeliveryCache();
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: cache,
+  });
+  const address = await listen(server);
+  try {
+    const headers = { "x-github-delivery": "delivery-1", "x-github-event": "issues" };
+    assert.equal((await postJson(address, body, headers)).status, 202);
+    const second = await postJson(address, body, headers);
+    assert.equal(second.status, 202);
+    assert.deepEqual(await second.json(), { ok: true, duplicate: true });
+  } finally {
+    server.close();
+  }
+});
+
+test("acknowledges webhook deliveries even when async routing fails", async () => {
+  const body = "{}";
+  const cache = new DeliveryCache();
+  let attempts = 0;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: cache,
+    onEvent: async () => {
+      attempts += 1;
+      throw new Error("routing failed");
+    },
+  });
+  const address = await listen(server);
+  try {
+    const headers = { "x-github-delivery": "delivery-1", "x-github-event": "issues" };
+    assert.equal((await postJson(address, body, headers)).status, 202);
+    const second = await postJson(address, body, headers);
+    assert.equal(second.status, 202);
+    assert.deepEqual(await second.json(), { ok: true, duplicate: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("acknowledges valid webhook deliveries when cache persistence fails", async () => {
+  const body = "{}";
+  class FailingSaveCache extends DeliveryCache {
+    override async save(): Promise<void> {
+      throw new Error("cache write failed");
+    }
+  }
+  const cache = new FailingSaveCache();
+  let routed = false;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: cache,
+    onEvent: async () => {
+      routed = true;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issues",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issues", deliveryId: "delivery-1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(routed, true);
+    assert.equal(cache.has("delivery-1"), true);
+  } finally {
+    server.close();
+  }
+});
+
+test("acknowledges webhook deliveries when dedupe cache persistence fails", async () => {
+  const body = "{}";
+  const cache = new DeliveryCache();
+  cache.save = async () => {
+    throw new Error("disk full");
+  };
+  let attempts = 0;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: cache,
+    onEvent: async () => {
+      attempts += 1;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issues",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issues", deliveryId: "delivery-1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(cache.has("delivery-1"), true);
+  } finally {
+    server.close();
+  }
+});
+
+test("acknowledges webhook deliveries before async routing completes", async () => {
+  const body = "{}";
+  let finishRouting: (() => void) | undefined;
+  let routed = false;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+    onEvent: async () => {
+      await new Promise<void>((resolve) => {
+        finishRouting = resolve;
+      });
+      routed = true;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issue_comment",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issue_comment", deliveryId: "delivery-1" });
+    assert.equal(routed, false);
+    finishRouting?.();
+  } finally {
+    server.close();
+  }
+});
+
+test("rejects request bodies above the configured limit", async () => {
+  const server = createWebhookServer({
+    mode: "localhost",
+    bodyLimitBytes: 2,
+    deliveryCache: new DeliveryCache(),
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, "{}{}");
+    assert.equal(response.status, 413);
+  } finally {
+    server.close();
+  }
+});

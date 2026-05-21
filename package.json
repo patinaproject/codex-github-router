@@ -1,8 +1,19 @@
 {
   "name": "codex-github-router",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "description": "Routes GitHub events to Codex",
+  "bin": {
+    "codex-github-router": "./bin/codex-github-router.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "author": {
     "name": "Ted Mader",
     "email": "ted@patinaproject.com",
@@ -16,12 +27,15 @@
   },
   "scripts": {
     "prepare": "husky",
-    "postinstall": "bash scripts/install-third-party-skills.sh",
     "commit": "git-cz",
     "commit:retry": "git-cz --retry",
     "commitlint": "commitlint",
     "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#skills/**\" \"#.agents/skills/**\" \"#.claude/skills/**\"",
-    "test": "bash scripts/tests/pr-body-link.test.sh",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test \"test/**/*.test.ts\" && bash scripts/tests/pr-body-link.test.sh",
+    "prepack": "pnpm build",
+    "pack:dry-run": "npm pack --dry-run",
     "skills:restore": "bash scripts/install-third-party-skills.sh",
     "skills:update": "npx --yes skills@latest update --project --yes"
   },
@@ -36,10 +50,16 @@
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
+    "@types/node": "^25.9.1",
     "commitizen": "^4.3.1",
     "cz-customizable": "^7.5.1",
     "husky": "^9.1.7",
     "lint-staged": "^15.2.10",
-    "markdownlint-cli2": "^0.14.0"
+    "markdownlint-cli2": "^0.14.0",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.4.0"
   }
 }

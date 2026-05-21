@@ -57,6 +57,9 @@ fail "tilde fenced code is ignored" $'~~~\nRelated to #1\n~~~'
 fail "mixed fences stay inside opening fence" $'~~~\n```\nRelated to #1\n~~~'
 fail "long backtick fence ignores shorter inner fence" $'````\n```\nRelated to #1\n````'
 fail "long tilde fence ignores shorter inner fence" $'~~~~\n~~~\nRelated to #1\n~~~~'
+fail "fence closer with text stays inside fence" $'~~~\n~~~ not closing\nRelated to #1\n~~~'
+fail "fence closer indented four spaces stays inside fence" $'```\n    ```\nRelated to #1\n```'
+pass "HTML comment markers inside fence do not remove valid link" $'```\n<!--\n```\nRelated to #1\n-->'
 fail "indented code is ignored" "    Related to #1"
 fail "blockquote is ignored" "> Related to #1"
 fail "strikethrough is ignored" "~~Related to #1~~"

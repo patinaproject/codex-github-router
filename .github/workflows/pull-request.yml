@@ -66,37 +66,50 @@ jobs:
           # Strip HTML comments, fenced code blocks, inline code, strikethrough,
           # blockquotes, and indented code blocks.
           sanitized=$(printf '%s' "$PR_BODY" \
-            | perl -0pe 's/<!--.*?-->//gs' \
             | awk '
-                function fence_length(line,    trimmed, char, i) {
-                  trimmed = line
-                  sub(/^[[:space:]]*/, "", trimmed)
-                  char = substr(trimmed, 1, 1)
+                function fence_marker(line, closing,    indent, body, char, i, suffix) {
+                  match(line, /^ */)
+                  indent = RLENGTH
+                  if (indent > 3 || substr(line, indent + 1, 1) == "\t") {
+                    return ""
+                  }
+                  body = substr(line, indent + 1)
+                  char = substr(body, 1, 1)
                   if (char != "`" && char != "~") {
-                    return 0
+                    return ""
                   }
-                  for (i = 1; i <= length(trimmed) && substr(trimmed, i, 1) == char; i++) {
+                  for (i = 1; i <= length(body) && substr(body, i, 1) == char; i++) {
                   }
-                  return i - 1
-                }
-                {
-                  marker_len = fence_length($0)
-                  marker_char = substr($0, match($0, /[^[:space:]]/), 1)
+                  if (i - 1 < 3) {
+                    return ""
+                  }
+                  suffix = substr(body, i)
+                  if (closing && suffix !~ /^[[:space:]]*$/) {
+                    return ""
+                  }
+                  return char ":" i - 1
                 }
                 active_char != "" {
-                  if (marker_char == active_char && marker_len >= active_len) {
+                  marker = fence_marker($0, 1)
+                  split(marker, parts, ":")
+                  if (parts[1] == active_char && parts[2] >= active_len) {
                     active_char = ""
                     active_len = 0
                   }
                   next
                 }
-                marker_len >= 3 {
-                  active_char = marker_char
-                  active_len = marker_len
-                  next
+                {
+                  marker = fence_marker($0, 0)
+                  split(marker, parts, ":")
+                  if (parts[2] >= 3) {
+                    active_char = parts[1]
+                    active_len = parts[2]
+                    next
+                  }
+                  print
                 }
-                { print }
               ' \
+            | perl -0pe 's/<!--.*?-->//gs' \
             | perl -0pe 's/(`+)(?:(?!\1).)*\1//gs' \
             | sed -E 's/~~[^~]*~~//g')
           sanitized=$(printf '%s' "$sanitized" | grep -vE '^[[:space:]]*>|^([[:space:]]{4,}|[[:space:]]*\t)' || true)
