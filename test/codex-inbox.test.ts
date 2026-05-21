@@ -45,6 +45,17 @@ async function writeAppServerResponses(child: ReturnType<typeof createAppServerP
   child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`);
 }
 
+async function writeFailedAppServerTurn(child: ReturnType<typeof createAppServerProcess>, threadId: string, turnId: string): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "2", result: { thread: { id: threadId } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "3", result: { turn: { id: turnId } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "failed" } } })}\n`);
+}
+
 test("builds a Codex inbox notification from an issue comment delivery", () => {
   const notification = buildCodexInboxNotification({
     event: "issue_comment",
@@ -102,6 +113,28 @@ test("delivers to explicit Codex thread ID when available", async () => {
   assert.match(child.stdinLines[2] ?? "", new RegExp('"method":"thread/resume"'));
   assert.match(child.stdinLines[3] ?? "", new RegExp('"method":"turn/start"'));
   assert.match(child.stdinLines[3] ?? "", /Received issue_comment delivery/);
+});
+
+test("treats a started Codex turn as delivered even if the later turn fails", async () => {
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: { HOME: "/home/test", CODEX_THREAD_ID: "thread-123" },
+    execFile: async () => ({ stdout: "", stderr: "" }),
+    spawnProcess: () => child,
+  });
+  await writeFailedAppServerTurn(child, "thread-123", "turn-123");
+  const result = await delivery;
+
+  assert.deepEqual(result, { delivered: true, threadId: "thread-123", turnId: "turn-123" });
 });
 
 test("discovers the latest matching Codex thread from local state", async () => {

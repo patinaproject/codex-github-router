@@ -494,7 +494,7 @@ function startCodexTurn({
           const status = stringField(completedTurn, "status") ?? "unknown";
           if (!turnId || completedTurnId === turnId) {
             shutdown();
-            if (status === "completed" && completedTurnId) {
+            if (completedTurnId) {
               resolveOnce(completedTurnId);
             } else {
               rejectOnce(new Error(`Codex turn ${completedTurnId ?? "unknown"} completed with status ${status}`));
