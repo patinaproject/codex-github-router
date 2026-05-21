@@ -9,11 +9,12 @@ import type { Readable, Writable } from "node:stream";
 
 const execFileAsync = promisify(nodeExecFile);
 const DEFAULT_EXCERPT_LENGTH = 500;
-const DEFAULT_DESKTOP_CODEX_APP_SERVER_BIN = "/Applications/Codex.app/Contents/Resources/codex";
+const DEFAULT_CODEX_APP_BUNDLED_APP_SERVER_BIN = "/Applications/Codex.app/Contents/Resources/codex";
 const FALLBACK_CODEX_APP_SERVER_BIN = "codex";
 const DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_SESSION_SCAN_DAYS = 14;
-const CODEX_APP_SERVER_LISTEN_MODE = "listen";
+const CODEX_APP_SERVER_CONTROL_SOCKET_ENV = "CODEX_APP_SERVER_CONTROL_SOCKET";
+const CODEX_APP_SERVER_STDIO_MODE = "listen";
 const CODEX_APP_SERVER_PROXY_MODE = "proxy";
 
 type ExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
@@ -60,12 +61,12 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
 
   const notification = buildCodexInboxNotification(event);
   const codexBin = resolveCodexAppServerBin(options.env);
-  const appServerArgs = resolveCodexAppServerArgs(options.env);
+  const appServerTransportArgs = resolveAppServerTransportArgs(options.env);
   const codexVersion = options.spawnProcess ? null : await codexAppServerVersion(codexBin, execFile);
   let turn: CodexTurnResult;
   try {
     turn = await startCodexTurn({
-      appServerArgs,
+      appServerTransportArgs,
       codexBin,
       codexVersion,
       env: options.env,
@@ -358,7 +359,7 @@ function codexSessionsRoot(env: NodeJS.ProcessEnv): string {
 }
 
 function startCodexTurn({
-  appServerArgs,
+  appServerTransportArgs,
   codexBin,
   codexVersion,
   env,
@@ -367,7 +368,7 @@ function startCodexTurn({
   spawnProcess,
   threadId,
 }: {
-  appServerArgs: readonly string[];
+  appServerTransportArgs: readonly string[];
   codexBin: string;
   codexVersion: string | null;
   env: NodeJS.ProcessEnv;
@@ -376,12 +377,13 @@ function startCodexTurn({
   spawnProcess: SpawnProcess;
   threadId: string;
 }): Promise<CodexTurnResult> {
-  const appServerCommand = `${codexBin} ${appServerArgs.join(" ")}`;
+  const appServerCommand = `${codexBin} ${appServerTransportArgs.join(" ")}`;
   const appServerLabel = `Codex app-server ${appServerCommand}${codexVersion ? ` (${codexVersion})` : ""}`;
   const timeoutMs = Number(env.CODEX_APP_SERVER_TIMEOUT_MS ?? DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS);
   logAppServer(log, `using ${codexBin}${codexVersion ? ` (${codexVersion})` : ""}`);
+  logAppServer(log, appServerTransportMessage(appServerTransportArgs));
   logAppServer(log, `spawn ${appServerCommand}`);
-  const child = spawnProcess(codexBin, appServerArgs, {
+  const child = spawnProcess(codexBin, appServerTransportArgs, {
     env: codexAppServerEnv(env),
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -641,20 +643,48 @@ function resolveCodexAppServerBin(env: NodeJS.ProcessEnv): string {
     return env.CODEX_APP_SERVER_BIN;
   }
 
-  const desktopBin = env.CODEX_DESKTOP_APP_SERVER_BIN ?? DEFAULT_DESKTOP_CODEX_APP_SERVER_BIN;
-  return existsSync(desktopBin) ? desktopBin : FALLBACK_CODEX_APP_SERVER_BIN;
+  const bundledAppServerBin = env.CODEX_APP_BUNDLED_APP_SERVER_BIN ?? DEFAULT_CODEX_APP_BUNDLED_APP_SERVER_BIN;
+  return existsSync(bundledAppServerBin) ? bundledAppServerBin : FALLBACK_CODEX_APP_SERVER_BIN;
 }
 
-function resolveCodexAppServerArgs(env: NodeJS.ProcessEnv): readonly string[] {
-  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_PROXY_MODE || env.CODEX_APP_SERVER_SOCK) {
+function resolveAppServerTransportArgs(env: NodeJS.ProcessEnv): readonly string[] {
+  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_STDIO_MODE) {
+    return ["app-server", "--listen", "stdio://"];
+  }
+
+  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_PROXY_MODE) {
+    const controlSocket = resolveAppServerControlSocket(env);
     const args = ["app-server", "proxy"];
-    if (env.CODEX_APP_SERVER_SOCK) {
-      args.push("--sock", env.CODEX_APP_SERVER_SOCK);
+    if (controlSocket) {
+      args.push("--sock", controlSocket);
     }
     return args;
   }
 
   return ["app-server", "--listen", "stdio://"];
+}
+
+function resolveAppServerControlSocket(env: NodeJS.ProcessEnv): string | null {
+  const configuredSocket = env[CODEX_APP_SERVER_CONTROL_SOCKET_ENV];
+  if (configuredSocket) {
+    return existsSync(configuredSocket) ? configuredSocket : null;
+  }
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().uid;
+  const defaultControlSocket = path.join(os.tmpdir(), "codex-ipc", `ipc-${uid}.sock`);
+  return existsSync(defaultControlSocket) ? defaultControlSocket : null;
+}
+
+function appServerTransportMessage(appServerTransportArgs: readonly string[]): string {
+  if (appServerTransportArgs[1] === CODEX_APP_SERVER_PROXY_MODE) {
+    const socketIndex = appServerTransportArgs.indexOf("--sock");
+    const socketPath = socketIndex >= 0 ? appServerTransportArgs[socketIndex + 1] : undefined;
+    return socketPath
+      ? `opened app-server transport: Unix socket control socket ${socketPath}`
+      : "opened app-server transport: default Unix socket control socket";
+  }
+
+  return "opened app-server transport: stdio";
 }
 
 async function codexAppServerVersion(codexBin: string, execFile: ExecFile): Promise<string | null> {

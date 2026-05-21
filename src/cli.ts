@@ -129,11 +129,11 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
             context.stderr.write(`Codex response: ${result.agentMessage}\n`);
           }
         } else {
-          context.stderr.write(`Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${result.reason ?? "unknown reason"}.\n`);
+          writeWarning(context, `Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${result.reason ?? "unknown reason"}.`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        context.stderr.write(`Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${message}\n`);
+        writeWarning(context, `Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${message}`);
       }
       return;
     }
@@ -429,6 +429,10 @@ function hasActiveRouting(record: Record<string, unknown>): boolean {
 
 function isHookId(value: unknown): value is number | string {
   return typeof value === "number" || typeof value === "string";
+}
+
+export function writeWarning(context: Pick<RuntimeContext, "env" | "stderr">, message: string): void {
+  context.stderr.write(`${colorize("warning", "yellow", { env: context.env, stream: context.stderr })} ${message}\n`);
 }
 
 function isNgrokEndpointConflict(error: unknown): boolean {

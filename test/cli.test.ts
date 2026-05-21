@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
-import { describePingSource, resolveRoutingTarget, runCli } from "../src/cli.js";
+import { describePingSource, resolveRoutingTarget, runCli, writeWarning } from "../src/cli.js";
 import { SETUP_TITLE } from "../src/setup.js";
 
 function createContext(env = {}) {
@@ -55,6 +55,14 @@ test("returns machine-readable errors under --json", async () => {
 
   assert.equal(code, 1);
   assert.equal(JSON.parse(output().stdout).ok, false);
+});
+
+test("writes warning log lines with a yellow severity label", () => {
+  const { context, output } = createContext({ FORCE_COLOR: "1" });
+
+  writeWarning(context, "Could not deliver issue_comment delivery delivery-1 to Codex: no Codex session found.");
+
+  assert.equal(output().stderr, "\u001b[33mwarning\u001b[0m Could not deliver issue_comment delivery delivery-1 to Codex: no Codex session found.\n");
 });
 
 test("returns from failed default tunnel startup instead of hanging", async () => {

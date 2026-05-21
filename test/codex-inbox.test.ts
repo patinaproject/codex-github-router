@@ -9,6 +9,12 @@ import { buildCodexInboxNotification, deliverToCodexInbox } from "../src/codex-i
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 
+const MISSING_APP_SERVER_CONTROL_SOCKET = path.join(os.tmpdir(), "missing-codex-app-server-control.sock");
+
+function envWithoutAppServerControlSocket(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { CODEX_APP_SERVER_CONTROL_SOCKET: MISSING_APP_SERVER_CONTROL_SOCKET, ...env };
+}
+
 function createAppServerProcess(): ChildProcessByStdio<Writable, Readable, Readable> & { stdinLines: string[]; killedSignals: string[] } {
   const child = new EventEmitter() as ChildProcessByStdio<Writable, Readable, Readable> & { stdinLines: string[]; killedSignals: string[] };
   const stdin = new PassThrough();
@@ -161,7 +167,7 @@ test("delivers to explicit router Codex thread ID when available", async () => {
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       return { stdout: "", stderr: "" };
@@ -184,6 +190,7 @@ test("delivers to explicit router Codex thread ID when available", async () => {
   assert.equal(calls[0]?.file, "codex");
   assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
   assert.match(child.stdinLines[0] ?? "", /"method":"initialize"/);
+  assert.match(child.stdinLines[0] ?? "", /"version":"0\.1\.0"/);
   assert.match(child.stdinLines[1] ?? "", /"method":"initialized"/);
   assert.match(child.stdinLines[2] ?? "", new RegExp('"method":"thread/resume"'));
   assert.match(child.stdinLines[3] ?? "", new RegExp('"method":"turn/start"'));
@@ -191,7 +198,7 @@ test("delivers to explicit router Codex thread ID when available", async () => {
   assert.doesNotMatch(child.stdinLines[3] ?? "", /text_elements/);
 });
 
-test("logs app-server JSON-RPC interactions without message bodies", async () => {
+test("logs app-server protocol interactions without message bodies", async () => {
   const child = createAppServerProcess();
   const logs: string[] = [];
   const delivery = deliverToCodexInbox({
@@ -204,7 +211,7 @@ test("logs app-server JSON-RPC interactions without message bodies", async () =>
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
     appServerLog: (message) => logs.push(message),
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
@@ -213,6 +220,7 @@ test("logs app-server JSON-RPC interactions without message bodies", async () =>
   await delivery;
 
   assert.match(logs.join("\n"), /\[codex-app-server\] spawn codex app-server --listen stdio:\/\//);
+  assert.match(logs.join("\n"), /\[codex-app-server\] opened app-server transport: stdio/);
   assert.match(logs.join("\n"), /-> request initialize id=1/);
   assert.match(logs.join("\n"), /-> request thread\/resume id=2 thread=thread-123/);
   assert.match(logs.join("\n"), /-> request turn\/start id=3 thread=thread-123 input=1 item/);
@@ -234,7 +242,7 @@ test("returns and logs the completed Codex agent response", async () => {
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
     appServerLog: (message) => logs.push(message),
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
@@ -248,11 +256,11 @@ test("returns and logs the completed Codex agent response", async () => {
   assert.doesNotMatch(logs.join("\n"), /please acknowledge/);
 });
 
-test("prefers the Codex Desktop app-server binary when it exists", async () => {
+test("prefers the Codex app-server binary when it exists", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
-  const desktopBin = path.join(home, "Codex.app", "Contents", "Resources", "codex");
-  await mkdir(path.dirname(desktopBin), { recursive: true });
-  await writeFile(desktopBin, "");
+  const bundledAppServerBin = path.join(home, "Codex.app", "Contents", "Resources", "codex");
+  await mkdir(path.dirname(bundledAppServerBin), { recursive: true });
+  await writeFile(bundledAppServerBin, "");
   const calls: Array<{ file: string; args: readonly string[] }> = [];
   const child = createAppServerProcess();
   const delivery = deliverToCodexInbox({
@@ -265,11 +273,11 @@ test("prefers the Codex Desktop app-server binary when it exists", async () => {
     },
   }, {
     cwd: "/repo",
-    env: {
-      CODEX_DESKTOP_APP_SERVER_BIN: desktopBin,
+    env: envWithoutAppServerControlSocket({
+      CODEX_APP_BUNDLED_APP_SERVER_BIN: bundledAppServerBin,
       CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
       HOME: "/home/test",
-    },
+    }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       return { stdout: "", stderr: "" };
@@ -286,14 +294,19 @@ test("prefers the Codex Desktop app-server binary when it exists", async () => {
     delivered: true,
     threadId: "thread-123",
     turnId: "turn-123",
-    appServerBin: desktopBin,
+    appServerBin: bundledAppServerBin,
   });
-  assert.equal(calls[0]?.file, desktopBin);
+  assert.equal(calls[0]?.file, bundledAppServerBin);
   assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
 });
 
-test("can explicitly request direct stdio listen mode", async () => {
+test("defaults to stdio transport when the app-server control socket is available", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const controlSocket = path.join(home, "codex-ipc", "ipc-test.sock");
+  await mkdir(path.dirname(controlSocket), { recursive: true });
+  await writeFile(controlSocket, "");
   const calls: Array<{ file: string; args: readonly string[] }> = [];
+  const logs: string[] = [];
   const child = createAppServerProcess();
   const delivery = deliverToCodexInbox({
     event: "issue_comment",
@@ -307,10 +320,46 @@ test("can explicitly request direct stdio listen mode", async () => {
     cwd: "/repo",
     env: {
       CODEX_APP_SERVER_BIN: "codex",
-      CODEX_APP_SERVER_MODE: "listen",
+      CODEX_APP_SERVER_CONTROL_SOCKET: controlSocket,
       CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
       HOME: "/home/test",
     },
+    execFile: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "", stderr: "" };
+    },
+    appServerLog: (message) => logs.push(message),
+    spawnProcess: (file, args) => {
+      calls.push({ file, args });
+      return child;
+    },
+  });
+  await writeAppServerResponses(child, "thread-123", "turn-123");
+  await delivery;
+
+  assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
+  assert.match(logs.join("\n"), /\[codex-app-server\] opened app-server transport: stdio/);
+});
+
+test("can explicitly request stdio transport mode", async () => {
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: envWithoutAppServerControlSocket({
+      CODEX_APP_SERVER_BIN: "codex",
+      CODEX_APP_SERVER_MODE: "listen",
+      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
+      HOME: "/home/test",
+    }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       return { stdout: "", stderr: "" };
@@ -327,7 +376,11 @@ test("can explicitly request direct stdio listen mode", async () => {
   assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
 });
 
-test("passes a configured Desktop app-server Unix socket to proxy mode", async () => {
+test("passes a configured app-server control socket to proxy mode", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const controlSocket = path.join(home, "codex-ipc", "ipc-test.sock");
+  await mkdir(path.dirname(controlSocket), { recursive: true });
+  await writeFile(controlSocket, "");
   const calls: Array<{ file: string; args: readonly string[] }> = [];
   const child = createAppServerProcess();
   const delivery = deliverToCodexInbox({
@@ -343,7 +396,7 @@ test("passes a configured Desktop app-server Unix socket to proxy mode", async (
     env: {
       CODEX_APP_SERVER_BIN: "codex",
       CODEX_APP_SERVER_MODE: "proxy",
-      CODEX_APP_SERVER_SOCK: "/tmp/codex-ipc/ipc-test.sock",
+      CODEX_APP_SERVER_CONTROL_SOCKET: controlSocket,
       CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
       HOME: "/home/test",
     },
@@ -359,7 +412,7 @@ test("passes a configured Desktop app-server Unix socket to proxy mode", async (
   await writeAppServerResponses(child, "thread-123", "turn-123");
   await delivery;
 
-  assert.deepEqual(calls[0]?.args, ["app-server", "proxy", "--sock", "/tmp/codex-ipc/ipc-test.sock"]);
+  assert.deepEqual(calls[0]?.args, ["app-server", "proxy", "--sock", controlSocket]);
 });
 
 test("ignores ambient Codex thread ID when launched from Codex", async () => {
@@ -376,7 +429,7 @@ test("ignores ambient Codex thread ID when launched from Codex", async () => {
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_THREAD_ID: "thread-launcher" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_THREAD_ID: "thread-launcher" }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "git") {
@@ -419,7 +472,7 @@ test("rejects a started Codex turn that later fails", async () => {
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
   });
@@ -440,7 +493,7 @@ test("queues delivery until an active Codex turn completes", async () => {
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
   });
@@ -472,7 +525,7 @@ test("compacts and retries when a routed Codex turn exceeds the context window",
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
   });
@@ -502,7 +555,7 @@ test("discovers the latest matching Codex thread from local state", async () => 
     },
   }, {
     cwd: "/repo",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test" },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test" }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "git") {
@@ -567,7 +620,7 @@ test("routes pull request comments to the Codex session for the PR head branch",
     },
   }, {
     cwd: "/repos/router-main",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: home },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: home }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "gh") {
@@ -646,7 +699,7 @@ test("ignores subagent sessions when routing pull request comments", async () =>
     },
   }, {
     cwd: "/repos/router",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: home },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: home }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "gh") {
@@ -706,7 +759,7 @@ test("routes pull request reviews using the payload PR head branch", async () =>
     },
   }, {
     cwd: "/repos/router-main",
-    env: { CODEX_APP_SERVER_BIN: "codex", HOME: home },
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: home }),
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "git" && args[1] === "/repos/router-review" && args[2] === "remote") {
