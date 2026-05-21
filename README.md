@@ -30,6 +30,24 @@ The default mode starts a local listener and a managed ngrok tunnel.
 Pull request comments and reviews are routed to the local Codex session whose
 GitHub repository and PR head branch match the incoming activity.
 
+Delivery can run in three modes:
+
+- `background`: starts a stdio Codex app-server turn. This preserves the
+  previous durable delivery behavior, but it does not prove that an already-open
+  Desktop chat will live-refresh.
+- `live`: connects through the Codex app-server proxy and requires the target
+  thread to already be loaded before starting the turn. If the live app-server
+  cannot prove ownership of the thread, delivery fails closed.
+- `auto`: tries live delivery first, then downgrades to background delivery with
+  an explicit warning when live-thread proof is unavailable.
+
+Select a mode with `CODEX_GITHUB_ROUTER_DELIVERY_MODE=live`, `background`, or
+`auto`. When no mode is set, the router uses `background` for compatibility.
+Live mode always uses the Codex app-server proxy. Set
+`CODEX_APP_SERVER_CONTROL_SOCKET` when you have a known control socket.
+Transient Desktop socket paths are only useful when they answer the app-server
+protocol and prove the target thread is loaded.
+
 While the foreground router is attached to an interactive terminal, it exposes
 small runtime commands:
 
@@ -102,8 +120,9 @@ codex-github-router --json webhooks reload
 codex-github-router --json request get /user
 ```
 
-- `doctor` checks local prerequisites, GitHub CLI auth, config paths, and setup
-  state.
+- `doctor` checks local prerequisites, GitHub CLI auth, config paths, setup
+  state, selected Codex app-server binary, Desktop process status, daemon help
+  availability, candidate control sockets, and target-thread readiness hints.
 - `settings show` prints sanitized local router settings.
 - `webhooks reload` re-reads remembered settings and reports whether reload can
   run with the current setup.
