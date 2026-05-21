@@ -47,6 +47,7 @@ pass "cross-repository closing keyword" "Resolves patinaproject/codex-github-rou
 pass "related issue link" "Related to #1"
 pass "blocks issue link" "Blocks #2"
 pass "partially satisfies issue link" "Partially satisfies #3"
+pass "nested list issue link" $'- Parent\n    - Related to #1'
 
 fail "empty body" ""
 fail "bare issue reference" "#1"
@@ -62,6 +63,7 @@ fail "fence closer indented four spaces stays inside fence" $'```\n    ```\nRela
 pass "HTML comment markers inside fence do not remove valid link" $'```\n<!--\n```\nRelated to #1\n-->'
 fail "indented code is ignored" "    Related to #1"
 fail "blockquote is ignored" "> Related to #1"
+fail "lazy blockquote continuation is ignored" $'> context\nRelated to #1'
 fail "strikethrough is ignored" "~~Related to #1~~"
 fail "HTML comment is ignored" "<!-- Related to #1 -->"
 fail "multiline HTML comment is ignored" $'<!--\nRelated to #1\n-->'
