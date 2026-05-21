@@ -13,10 +13,7 @@ const DEFAULT_CODEX_APP_BUNDLED_APP_SERVER_BIN = "/Applications/Codex.app/Conten
 const FALLBACK_CODEX_APP_SERVER_BIN = "codex";
 const DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_SESSION_SCAN_DAYS = 14;
-const CODEX_APP_SERVER_CONTROL_SOCKET_ENV = "CODEX_APP_SERVER_CONTROL_SOCKET";
-const CODEX_APP_SERVER_STDIO_MODE = "listen";
-const CODEX_APP_SERVER_PROXY_MODE = "proxy";
-const DELIVERY_MODE_ENV = "CODEX_GITHUB_ROUTER_DELIVERY_MODE";
+const CODEX_APP_SERVER_STDIO_ARGS = ["app-server", "--listen", "stdio://"] as const;
 
 type ExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 type AppServerProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -42,9 +39,6 @@ export interface CodexInboxResult {
   agentMessage?: string | undefined;
   appServerBin?: string | undefined;
   appServerVersion?: string | undefined;
-  deliveryMode?: DeliveryMode | undefined;
-  transportMode?: TransportMode | undefined;
-  fallbackReason?: string | undefined;
   reason?: string | undefined;
 }
 
@@ -58,13 +52,10 @@ export interface CodexInboxOptions {
 
 export async function deliverToCodexInbox(event: CodexInboxEvent, options: CodexInboxOptions): Promise<CodexInboxResult> {
   const execFile = options.execFile ?? defaultExecFile;
-  const deliveryMode = resolveDeliveryMode(options.env);
   const thread = await findCodexThread(event, options, execFile);
   if (!thread.threadId) {
     return {
       delivered: false,
-      deliveryMode,
-      transportMode: "none",
       reason: thread.reason ?? "no matching Codex thread found",
     };
   }
@@ -72,53 +63,30 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
   const notification = buildCodexInboxNotification(event);
   const codexBin = resolveCodexAppServerBin(options.env);
   const codexVersion = options.spawnProcess ? null : await codexAppServerVersion(codexBin, execFile);
-  const liveTransport = resolveAppServerTransport(options.env, "live");
-  const backgroundTransport = resolveAppServerTransport(options.env, "background", {
-    forceStdio: deliveryMode === "auto" || options.env[DELIVERY_MODE_ENV] === "background",
-  });
-  const transports = deliveryMode === "live"
-    ? [liveTransport]
-    : deliveryMode === "auto"
-      ? [liveTransport, backgroundTransport]
-      : [backgroundTransport];
-  let fallbackReason: string | undefined;
-
-  for (const appServerTransport of transports) {
-    let turn: CodexTurnResult;
-    try {
-      turn = await startCodexTurn({
-        appServerTransport,
-        codexBin,
-        codexVersion,
-        env: options.env,
-        log: options.appServerLog,
-        message: notification.description,
-        spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
-        threadId: thread.threadId,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (deliveryMode === "auto" && appServerTransport.mode === "live" && error instanceof LiveDeliveryUnavailableError) {
-        fallbackReason = message;
-        logAppServer(options.appServerLog, `auto delivery falling back to background: ${message}`);
-        continue;
-      }
-      throw new Error(`thread ${thread.threadId}: ${message}`);
-    }
-    return {
-      delivered: true,
+  let turn: CodexTurnResult;
+  try {
+    turn = await startCodexTurn({
+      codexBin,
+      codexVersion,
+      env: options.env,
+      log: options.appServerLog,
+      message: notification.description,
+      spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
       threadId: thread.threadId,
-      turnId: turn.turnId,
-      ...(turn.agentMessage ? { agentMessage: turn.agentMessage } : {}),
-      appServerBin: codexBin,
-      ...(codexVersion ? { appServerVersion: codexVersion } : {}),
-      deliveryMode,
-      transportMode: appServerTransport.mode,
-      ...(fallbackReason ? { fallbackReason } : {}),
-    };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`thread ${thread.threadId}: ${message}`);
   }
 
-  return { delivered: false, reason: "no Codex delivery transport attempted" };
+  return {
+    delivered: true,
+    threadId: thread.threadId,
+    turnId: turn.turnId,
+    ...(turn.agentMessage ? { agentMessage: turn.agentMessage } : {}),
+    appServerBin: codexBin,
+    ...(codexVersion ? { appServerVersion: codexVersion } : {}),
+  };
 }
 
 export function buildCodexInboxNotification(event: CodexInboxEvent): { title: string; description: string } {
@@ -220,22 +188,6 @@ interface CodexGitSession extends CodexSession {
 interface CodexTurnResult {
   turnId: string;
   agentMessage?: string | undefined;
-}
-
-type DeliveryMode = "live" | "background" | "auto";
-type TransportMode = "live" | "background" | "none";
-
-interface AppServerTransport {
-  args: readonly string[];
-  mode: TransportMode;
-  requireLoadedThread: boolean;
-}
-
-class LiveDeliveryUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "LiveDeliveryUnavailableError";
-  }
 }
 
 async function recentCodexSessions(env: NodeJS.ProcessEnv): Promise<CodexSession[]> {
@@ -407,7 +359,6 @@ function codexSessionsRoot(env: NodeJS.ProcessEnv): string {
 }
 
 function startCodexTurn({
-  appServerTransport,
   codexBin,
   codexVersion,
   env,
@@ -416,7 +367,6 @@ function startCodexTurn({
   spawnProcess,
   threadId,
 }: {
-  appServerTransport: AppServerTransport;
   codexBin: string;
   codexVersion: string | null;
   env: NodeJS.ProcessEnv;
@@ -425,7 +375,7 @@ function startCodexTurn({
   spawnProcess: SpawnProcess;
   threadId: string;
 }): Promise<CodexTurnResult> {
-  const appServerTransportArgs = appServerTransport.args;
+  const appServerTransportArgs = CODEX_APP_SERVER_STDIO_ARGS;
   const appServerCommand = `${codexBin} ${appServerTransportArgs.join(" ")}`;
   const appServerLabel = `Codex app-server ${appServerCommand}${codexVersion ? ` (${codexVersion})` : ""}`;
   const timeoutMs = Number(env.CODEX_APP_SERVER_TIMEOUT_MS ?? DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS);
@@ -443,7 +393,6 @@ function startCodexTurn({
   let settled = false;
   let compacting = false;
   let waitingForActiveTurn = false;
-  let liveProofComplete = !appServerTransport.requireLoadedThread;
   let retriedAfterCompaction = false;
   let turnId: string | null = null;
   let agentMessage = "";
@@ -482,9 +431,7 @@ function startCodexTurn({
       clearTimeout(timeout);
       child.stdin.end();
       child.kill("SIGTERM");
-      reject(appServerTransport.requireLoadedThread && !liveProofComplete
-        ? new LiveDeliveryUnavailableError(error.message)
-        : error);
+      reject(error);
     }
 
     function resolveOnce(result: CodexTurnResult): void {
@@ -588,25 +535,11 @@ function startCodexTurn({
 
       if (responseMethod === "initialize") {
         notify("initialized");
-        if (appServerTransport.requireLoadedThread) {
-          request("thread/loaded/list");
-          return;
-        }
         request("thread/resume", { threadId, excludeTurns: true });
         return;
       }
 
       const result = objectField(messageJson, "result");
-      if (responseMethod === "thread/loaded/list") {
-        if (!loadedThreadListIncludesThread(result, threadId)) {
-          rejectOnce(new Error(`target thread ${threadId} is not loaded in the live Codex app-server`));
-          return;
-        }
-        liveProofComplete = true;
-        request("thread/resume", { threadId, excludeTurns: true });
-        return;
-      }
-
       const thread = objectField(result, "thread");
       if (stringField(thread, "id") === threadId && !resumed) {
         resumed = true;
@@ -713,73 +646,7 @@ function resolveCodexAppServerBin(env: NodeJS.ProcessEnv): string {
   return existsSync(bundledAppServerBin) ? bundledAppServerBin : FALLBACK_CODEX_APP_SERVER_BIN;
 }
 
-function resolveDeliveryMode(env: NodeJS.ProcessEnv): DeliveryMode {
-  const mode = env[DELIVERY_MODE_ENV];
-  return mode === "live" || mode === "auto" || mode === "background" ? mode : "background";
-}
-
-function resolveAppServerTransport(env: NodeJS.ProcessEnv, mode: TransportMode, { forceStdio = false }: { forceStdio?: boolean } = {}): AppServerTransport {
-  if (mode === "live") {
-    return {
-      args: resolveLiveAppServerTransportArgs(env),
-      mode,
-      requireLoadedThread: true,
-    };
-  }
-
-  return {
-    args: forceStdio ? ["app-server", "--listen", "stdio://"] : resolveAppServerTransportArgs(env),
-    mode,
-    requireLoadedThread: false,
-  };
-}
-
-function resolveLiveAppServerTransportArgs(env: NodeJS.ProcessEnv): readonly string[] {
-  const controlSocket = resolveAppServerControlSocket(env);
-  const args = ["app-server", "proxy"];
-  if (controlSocket) {
-    args.push("--sock", controlSocket);
-  }
-  return args;
-}
-
-function resolveAppServerTransportArgs(env: NodeJS.ProcessEnv): readonly string[] {
-  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_STDIO_MODE) {
-    return ["app-server", "--listen", "stdio://"];
-  }
-
-  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_PROXY_MODE) {
-    const controlSocket = resolveAppServerControlSocket(env);
-    const args = ["app-server", "proxy"];
-    if (controlSocket) {
-      args.push("--sock", controlSocket);
-    }
-    return args;
-  }
-
-  return ["app-server", "--listen", "stdio://"];
-}
-
-function resolveAppServerControlSocket(env: NodeJS.ProcessEnv): string | null {
-  const configuredSocket = env[CODEX_APP_SERVER_CONTROL_SOCKET_ENV];
-  if (configuredSocket) {
-    return existsSync(configuredSocket) ? configuredSocket : null;
-  }
-
-  const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().uid;
-  const defaultControlSocket = path.join(os.tmpdir(), "codex-ipc", `ipc-${uid}.sock`);
-  return existsSync(defaultControlSocket) ? defaultControlSocket : null;
-}
-
-function appServerTransportMessage(appServerTransportArgs: readonly string[]): string {
-  if (appServerTransportArgs[1] === CODEX_APP_SERVER_PROXY_MODE) {
-    const socketIndex = appServerTransportArgs.indexOf("--sock");
-    const socketPath = socketIndex >= 0 ? appServerTransportArgs[socketIndex + 1] : undefined;
-    return socketPath
-      ? `opened app-server transport: Unix socket control socket ${socketPath}`
-      : "opened app-server transport: default Unix socket control socket";
-  }
-
+function appServerTransportMessage(_appServerTransportArgs: readonly string[]): string {
   return "opened app-server transport: stdio";
 }
 
@@ -864,11 +731,6 @@ function summarizeAppServerNotification(messageJson: Record<string, unknown>): s
     details.push(`status=${status}`);
   }
   return details.length > 0 ? ` ${details.join(" ")}` : "";
-}
-
-function loadedThreadListIncludesThread(result: Record<string, unknown> | undefined, threadId: string): boolean {
-  const loadedThreadIds = result?.data;
-  return Array.isArray(loadedThreadIds) && loadedThreadIds.includes(threadId);
 }
 
 function defaultSpawnProcess(file: string, args: readonly string[], options: {

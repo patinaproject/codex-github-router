@@ -124,10 +124,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
           const appServer = result.appServerVersion
             ? `${result.appServerBin ?? "unknown"} (${result.appServerVersion})`
             : result.appServerBin ?? "unknown";
-          const transport = result.deliveryMode && result.transportMode
-            ? ` via ${result.transportMode} transport (${result.deliveryMode} mode${result.fallbackReason ? `, fallback: ${result.fallbackReason}` : ""})`
-            : "";
-          context.stderr.write(`Completed Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"} using ${appServer}${transport}.\n`);
+          context.stderr.write(`Completed Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"} using ${appServer} via stdio app-server.\n`);
           if (result.agentMessage) {
             context.stderr.write(`Codex response: ${result.agentMessage}\n`);
           }
