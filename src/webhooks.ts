@@ -199,7 +199,7 @@ function configuredTargets(targets: unknown[] | undefined, idKey: "login" | "ful
       return [];
     }
     const record = target as Record<string, unknown>;
-    if (record.enabled === false || typeof record[idKey] !== "string") {
+    if ((record.enabled === false && record.issueAutomationEnabled !== true) || typeof record[idKey] !== "string") {
       return [];
     }
     return [record];

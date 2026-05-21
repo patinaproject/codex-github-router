@@ -37,6 +37,7 @@ export interface SetupTargets {
 }
 
 type SetupContext = Pick<RuntimeContext, "stdin" | "stdout" | "stderr" | "env">;
+type SetupExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 type Cancelled = typeof CANCELLED;
 type SettingsChoice = "organizations" | "repositories" | "finish";
 type TargetChoice = string | "back";
@@ -56,10 +57,15 @@ interface SetupPromptAdapter {
   cancel(message: string, context: SetupContext): void;
 }
 
-export async function discoverGitHubTargets(): Promise<SetupTargets> {
+async function defaultSetupExecFile(file: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsync(file, [...args], { timeout: 15000 });
+  return { stdout, stderr };
+}
+
+export async function discoverGitHubTargets(runExecFile: SetupExecFile = defaultSetupExecFile): Promise<SetupTargets> {
   const [repos, orgs] = await Promise.all([
-    execFileAsync("gh", ["repo", "list", "--limit", "100", "--json", "nameWithOwner"], { timeout: 15000 }),
-    execFileAsync("gh", ["api", "user/orgs"], { timeout: 15000 }),
+    runExecFile("gh", ["repo", "list", "--limit", "100", "--json", "nameWithOwner"]),
+    runExecFile("gh", ["api", "--paginate", "user/orgs"]),
   ]);
 
   const parsedRepos = JSON.parse(repos.stdout) as Array<{ nameWithOwner?: string }>;

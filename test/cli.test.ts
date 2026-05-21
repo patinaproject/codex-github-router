@@ -151,6 +151,19 @@ test("repository routing overrides organization settings when repository routing
   );
 });
 
+test("organization issue automation routes even when organization webhooks are disabled", () => {
+  assert.deepEqual(
+    resolveRoutingTarget({
+      organizations: [{
+        login: "patinaproject",
+        enabled: false,
+        issueAutomationEnabled: true,
+      }],
+    }, "patinaproject/codex-github-router"),
+    { kind: "organization", name: "patinaproject" },
+  );
+});
+
 test("describes organization webhook ping deliveries clearly", () => {
   assert.equal(
     describePingSource({

@@ -135,7 +135,7 @@ test("deduplicates repeated delivery IDs", async () => {
   }
 });
 
-test("does not cache delivery IDs when event routing fails", async () => {
+test("acknowledges webhook deliveries even when async routing fails", async () => {
   const body = "{}";
   const cache = new DeliveryCache();
   let attempts = 0;
@@ -150,9 +150,41 @@ test("does not cache delivery IDs when event routing fails", async () => {
   const address = await listen(server);
   try {
     const headers = { "x-github-delivery": "delivery-1", "x-github-event": "issues" };
-    assert.equal((await postJson(address, body, headers)).status, 400);
-    assert.equal((await postJson(address, body, headers)).status, 400);
-    assert.equal(attempts, 2);
+    assert.equal((await postJson(address, body, headers)).status, 202);
+    const second = await postJson(address, body, headers);
+    assert.equal(second.status, 202);
+    assert.deepEqual(await second.json(), { ok: true, duplicate: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("acknowledges webhook deliveries before async routing completes", async () => {
+  const body = "{}";
+  let finishRouting: (() => void) | undefined;
+  let routed = false;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: new DeliveryCache(),
+    onEvent: async () => {
+      await new Promise<void>((resolve) => {
+        finishRouting = resolve;
+      });
+      routed = true;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issue_comment",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issue_comment", deliveryId: "delivery-1" });
+    assert.equal(routed, false);
+    finishRouting?.();
   } finally {
     server.close();
   }

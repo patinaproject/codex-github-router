@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PassThrough } from "node:stream";
-import { runInteractiveSetup } from "../src/setup.js";
+import { discoverGitHubTargets, runInteractiveSetup } from "../src/setup.js";
 import type { SetupTarget } from "../src/setup.js";
 
 type Cancelled = "cancelled";
@@ -159,6 +159,29 @@ test("interactive setup selects repositories and organizations with Clack prompt
     "select:finish",
     "outro:Setup saved. Commencing simulation...",
   ]);
+});
+
+test("discovers all authenticated organizations with gh pagination", async () => {
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
+  const targets = await discoverGitHubTargets(async (file, args) => {
+    calls.push({ file, args });
+    if (args[0] === "repo") {
+      return { stdout: JSON.stringify([]), stderr: "" };
+    }
+    return {
+      stdout: JSON.stringify([
+        { login: "owner-a" },
+        { login: "owner-b" },
+      ]),
+      stderr: "",
+    };
+  });
+
+  assert.deepEqual(targets.organizations, [
+    { id: "owner-a", label: "owner-a" },
+    { id: "owner-b", label: "owner-b" },
+  ]);
+  assert.deepEqual(calls.find((call) => call.args[0] === "api")?.args, ["api", "--paginate", "user/orgs"]);
 });
 
 test("organization-covered repositories do not create repository webhooks by default", async () => {

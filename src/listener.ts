@@ -105,13 +105,13 @@ export function createWebhookServer({
         response.end(JSON.stringify({ ok: true, ignored: true, event, action: eventAction(payload), deliveryId }));
         return;
       }
-      await onEvent?.({ event, deliveryId, payload });
       if (deliveryId) {
         deliveryCache?.add(deliveryId);
         await deliveryCache?.save();
       }
       response.writeHead(202, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, event, deliveryId }));
+      Promise.resolve(onEvent?.({ event, deliveryId, payload })).catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : "bad request";
       const status = message === "request body is too large" ? 413 : 400;

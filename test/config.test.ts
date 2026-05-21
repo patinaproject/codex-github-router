@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { chmod, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { cacheDir, configDir, sanitizeConfig } from "../src/config.js";
+import { cacheDir, configDir, configPath, sanitizeConfig, writeConfig } from "../src/config.js";
 
 test("resolves macOS config and cache paths", () => {
   const context = { platform: "darwin", homedir: "/Users/alice", env: {} };
@@ -73,4 +76,18 @@ test("sanitizes settings without exposing secret fields", () => {
       hasStoredSecrets: false,
     },
   );
+});
+
+test("writeConfig tightens permissions when rewriting an existing config file", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const context = { platform: "linux" as const, homedir: home, env: {} };
+  const target = configPath(context);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, "{}\n", { mode: 0o644 });
+  await chmod(target, 0o644);
+
+  await writeConfig({ version: 1 }, context);
+
+  const mode = (await stat(target)).mode & 0o777;
+  assert.equal(mode, 0o600);
 });

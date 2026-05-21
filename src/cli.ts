@@ -393,7 +393,7 @@ export function resolveRoutingTarget(config: RouterConfig | null, fullName: stri
       return false;
     }
     const record = target as Record<string, unknown>;
-    return record.fullName === fullName && hasActiveRepositoryRouting(record);
+    return record.fullName === fullName && hasActiveRouting(record);
   });
   if (repository && typeof (repository as Record<string, unknown>).fullName === "string") {
     return { kind: "repository", name: (repository as Record<string, unknown>).fullName as string };
@@ -408,7 +408,7 @@ export function resolveRoutingTarget(config: RouterConfig | null, fullName: stri
       return false;
     }
     const record = target as Record<string, unknown>;
-    return record.login === owner && record.enabled !== false;
+    return record.login === owner && hasActiveRouting(record);
   });
   if (organization && typeof (organization as Record<string, unknown>).login === "string") {
     return { kind: "organization", name: (organization as Record<string, unknown>).login as string };
@@ -416,7 +416,7 @@ export function resolveRoutingTarget(config: RouterConfig | null, fullName: stri
   return null;
 }
 
-function hasActiveRepositoryRouting(record: Record<string, unknown>): boolean {
+function hasActiveRouting(record: Record<string, unknown>): boolean {
   return record.enabled === true || record.issueAutomationEnabled === true;
 }
 

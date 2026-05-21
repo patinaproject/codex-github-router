@@ -1,4 +1,5 @@
 import { execFile as nodeExecFile, spawn as nodeSpawn } from "node:child_process";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +8,9 @@ import type { Readable, Writable } from "node:stream";
 
 const execFileAsync = promisify(nodeExecFile);
 const DEFAULT_EXCERPT_LENGTH = 500;
-const DEFAULT_CODEX_APP_SERVER_BIN = "/Applications/Codex.app/Contents/Resources/codex";
+const DEFAULT_CODEX_APP_SERVER_BIN = "codex";
 const DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_CODEX_SESSION_SCAN_DAYS = 14;
 
 type ExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 type AppServerProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -43,9 +45,9 @@ export interface CodexInboxOptions {
 
 export async function deliverToCodexInbox(event: CodexInboxEvent, options: CodexInboxOptions): Promise<CodexInboxResult> {
   const execFile = options.execFile ?? defaultExecFile;
-  const threadId = await findCodexThreadId(options, execFile);
-  if (!threadId) {
-    return { delivered: false, reason: "no matching Codex thread found" };
+  const thread = await findCodexThread(event, options, execFile);
+  if (!thread.threadId) {
+    return { delivered: false, reason: thread.reason ?? "no matching Codex thread found" };
   }
 
   const notification = buildCodexInboxNotification(event);
@@ -53,9 +55,9 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
     env: options.env,
     message: notification.description,
     spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
-    threadId,
+    threadId: thread.threadId,
   });
-  return { delivered: true, threadId, turnId };
+  return { delivered: true, threadId: thread.threadId, turnId };
 }
 
 export function buildCodexInboxNotification(event: CodexInboxEvent): { title: string; description: string } {
@@ -85,12 +87,21 @@ export function buildCodexInboxNotification(event: CodexInboxEvent): { title: st
   };
 }
 
-async function findCodexThreadId(options: CodexInboxOptions, execFile: ExecFile): Promise<string | null> {
+async function findCodexThread(event: CodexInboxEvent, options: CodexInboxOptions, execFile: ExecFile): Promise<{ threadId: string | null; reason?: string }> {
   const explicitThreadId = options.env.CODEX_THREAD_ID;
   if (explicitThreadId) {
-    return explicitThreadId;
+    return { threadId: explicitThreadId };
   }
 
+  const prSession = await findPrSessionThread(event, options, execFile);
+  if (prSession) {
+    return prSession;
+  }
+
+  return { threadId: await findCodexThreadIdFromState(options, execFile) };
+}
+
+async function findCodexThreadIdFromState(options: CodexInboxOptions, execFile: ExecFile): Promise<string | null> {
   const stateDb = codexStateDbPath(options.env);
   const branch = await currentBranch(options.cwd, execFile);
   const orderByBranch = branch ? `case when git_branch = ${sqlString(branch)} then 0 else 1 end, ` : "";
@@ -103,6 +114,181 @@ async function findCodexThreadId(options: CodexInboxOptions, execFile: ExecFile)
   const result = await execFile("sqlite3", [stateDb, query]);
   const threadId = result.stdout.trim().split(/\r?\n/u)[0];
   return threadId || null;
+}
+
+async function findPrSessionThread(event: CodexInboxEvent, options: CodexInboxOptions, execFile: ExecFile): Promise<{ threadId: string | null; reason?: string } | null> {
+  const repo = repositoryName(event.payload);
+  const prNumber = pullRequestNumber(event.payload);
+  if (!repo || repo === "unknown repository" || !prNumber) {
+    return null;
+  }
+
+  const headRef = await pullRequestHeadRef(event.payload, repo, prNumber, execFile);
+  if (!headRef) {
+    return { threadId: null, reason: `pull request head branch not found for ${repo}#${prNumber}` };
+  }
+
+  const sessions = await recentCodexSessions(options.env);
+  const inspected = (await Promise.all(sessions.map((session) => inspectCodexSession(session, execFile)))).filter((session): session is CodexGitSession => Boolean(session));
+  const matches = inspected
+    .filter((session) => session.repo === repo.toLowerCase() && session.branch === headRef)
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+  if (matches.length === 0) {
+    return { threadId: null, reason: `no Codex session found for ${repo}#${prNumber} on branch ${headRef}` };
+  }
+
+  const cwds = new Set(matches.map((match) => match.cwd));
+  if (cwds.size > 1) {
+    return { threadId: null, reason: `ambiguous Codex sessions for ${repo}#${prNumber} on branch ${headRef}` };
+  }
+
+  return { threadId: matches[0]?.threadId ?? null };
+}
+
+interface CodexSession {
+  threadId: string;
+  cwd: string;
+  mtimeMs: number;
+}
+
+interface CodexGitSession extends CodexSession {
+  repo: string;
+  branch: string;
+}
+
+async function recentCodexSessions(env: NodeJS.ProcessEnv): Promise<CodexSession[]> {
+  const root = codexSessionsRoot(env);
+  const scanDays = Number(env.CODEX_SESSION_SCAN_DAYS ?? DEFAULT_CODEX_SESSION_SCAN_DAYS);
+  const cutoff = Date.now() - scanDays * 24 * 60 * 60 * 1000;
+  const files = await walkJsonlFiles(root);
+  const sessions: CodexSession[] = [];
+  await Promise.all(files.map(async (file) => {
+    try {
+      const fileStat = await stat(file);
+      if (fileStat.mtimeMs < cutoff) {
+        return;
+      }
+      const session = await readCodexSession(file);
+      if (session) {
+        sessions.push({ ...session, mtimeMs: fileStat.mtimeMs });
+      }
+    } catch {
+      return;
+    }
+  }));
+  return sessions;
+}
+
+async function walkJsonlFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+
+  async function visit(directory: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    await Promise.all(entries.map(async (entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        files.push(entryPath);
+      }
+    }));
+  }
+
+  await visit(root);
+  return files;
+}
+
+async function readCodexSession(file: string): Promise<Omit<CodexSession, "mtimeMs"> | null> {
+  const raw = await readFile(file, "utf8");
+  for (const line of raw.split(/\r?\n/u)) {
+    if (!line.includes('"type":"session_meta"')) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const payload = objectField(parsed, "payload");
+      const threadId = stringField(payload, "id");
+      const cwd = stringField(payload, "cwd");
+      if (threadId && cwd) {
+        return { threadId, cwd };
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function inspectCodexSession(session: CodexSession, execFile: ExecFile): Promise<CodexGitSession | null> {
+  try {
+    const [remote, branch] = await Promise.all([
+      execFile("git", ["-C", session.cwd, "remote", "get-url", "origin"]),
+      execFile("git", ["-C", session.cwd, "branch", "--show-current"]),
+    ]);
+    const repo = normalizeGitHubRepo(remote.stdout.trim());
+    const branchName = branch.stdout.trim();
+    if (!repo || !branchName) {
+      return null;
+    }
+    return { ...session, repo, branch: branchName };
+  } catch {
+    return null;
+  }
+}
+
+async function pullRequestHeadRef(payload: Record<string, unknown>, repo: string, prNumber: number, execFile: ExecFile): Promise<string | null> {
+  const pullRequest = objectField(payload, "pull_request");
+  const head = objectField(pullRequest, "head");
+  const payloadHeadRef = stringField(head, "ref");
+  if (payloadHeadRef) {
+    return payloadHeadRef;
+  }
+  try {
+    const result = await execFile("gh", ["api", `repos/${repo}/pulls/${prNumber}`, "--jq", ".head.ref"]);
+    return result.stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function pullRequestNumber(payload: Record<string, unknown>): number | null {
+  const pullRequest = objectField(payload, "pull_request");
+  const pullRequestNumberValue = numberField(pullRequest, "number");
+  if (pullRequestNumberValue) {
+    return pullRequestNumberValue;
+  }
+
+  const issue = objectField(payload, "issue");
+  if (objectField(issue, "pull_request")) {
+    return numberField(issue, "number") ?? null;
+  }
+  return null;
+}
+
+function normalizeGitHubRepo(value: string): string | null {
+  const normalized = value.trim();
+  const sshMatch = normalized.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/u);
+  if (sshMatch?.[1]) {
+    return sshMatch[1].toLowerCase();
+  }
+
+  const httpsMatch = normalized.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/u);
+  if (httpsMatch?.[1]) {
+    return httpsMatch[1].toLowerCase();
+  }
+
+  const plainMatch = normalized.match(/^([^/]+\/[^/]+?)(?:\.git)?$/u);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].toLowerCase();
+  }
+
+  return null;
 }
 
 async function currentBranch(cwd: string, execFile: ExecFile): Promise<string | null> {
@@ -125,6 +311,10 @@ function codexStateDbPath(env: NodeJS.ProcessEnv): string {
 
 function codexHome(env: NodeJS.ProcessEnv): string {
   return env.CODEX_HOME ?? path.join(env.HOME ?? os.homedir(), ".codex");
+}
+
+function codexSessionsRoot(env: NodeJS.ProcessEnv): string {
+  return env.CODEX_SESSIONS_ROOT ?? path.join(codexHome(env), "sessions");
 }
 
 function startCodexTurn({
@@ -355,6 +545,11 @@ function objectField(value: Record<string, unknown> | undefined, key: string): R
 function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
   const field = value?.[key];
   return typeof field === "string" && field.length > 0 ? field : undefined;
+}
+
+function numberField(value: Record<string, unknown> | undefined, key: string): number | undefined {
+  const field = value?.[key];
+  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
 }
 
 function loginField(value: Record<string, unknown> | undefined): string | undefined {

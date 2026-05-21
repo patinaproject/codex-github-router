@@ -14,6 +14,10 @@ I could not find a small tool for that loop, so I made one. The goal is simple:
 spend more time reviewing and testing code, and less time manually relaying
 messages between GitHub and local Codex worktrees.
 
+For PR activity, the router is meant to preserve the working context: it matches
+the GitHub repository and pull request head branch to the local Codex session
+for that branch, then delivers the comment or review into that session.
+
 ## Usage
 
 Run the router as a foreground CLI:
@@ -23,6 +27,8 @@ npx codex-github-router
 ```
 
 The default mode starts a local listener and a managed ngrok tunnel.
+Pull request comments and reviews are routed to the local Codex session whose
+GitHub repository and PR head branch match the incoming activity.
 
 While the foreground router is attached to an interactive terminal, it exposes
 small runtime commands:

@@ -51,6 +51,7 @@ export async function writeConfig(config: RouterConfig, context: PathContext = {
   const target = configPath(context);
   await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
   await fs.writeFile(target, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await fs.chmod(target, 0o600);
 }
 
 export async function clearLocalState(context: PathContext = {}): Promise<void> {

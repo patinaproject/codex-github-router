@@ -178,6 +178,32 @@ test("skips disabled webhook targets", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("syncs repository webhooks when issue automation routing is enabled", async () => {
+  const calls: string[][] = [];
+  const config: RouterConfig = {
+    repositories: [{
+      fullName: "patinaproject/codex-github-router",
+      enabled: false,
+      issueAutomationEnabled: true,
+    }],
+  };
+
+  const result = await syncGitHubWebhooks({
+    config,
+    publicWebhookUrl: "https://router.example.com/webhooks/github",
+    env: { CODEX_GITHUB_ROUTER_WEBHOOK_SECRET: "test-secret" },
+    ghApi: async (args) => {
+      calls.push(args);
+      return JSON.stringify({ id: 987 });
+    },
+  });
+
+  assert.deepEqual(result.repositories, [{ fullName: "patinaproject/codex-github-router", hookId: 987, action: "created" }]);
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["-X", "POST", "/repos/patinaproject/codex-github-router/hooks"],
+  ]);
+});
+
 test("syncing an organization-covered repository does not create a repo hook when disabled", async () => {
   const calls: string[][] = [];
   const config: RouterConfig = {
