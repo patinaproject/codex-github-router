@@ -33,7 +33,7 @@
     "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#skills/**\" \"#.agents/skills/**\" \"#.claude/skills/**\"",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "test": "node --import tsx --test \"test/**/*.test.ts\" && bash scripts/tests/pr-body-link.test.sh",
     "prepack": "pnpm build",
     "pack:dry-run": "npm pack --dry-run",
     "skills:restore": "bash scripts/install-third-party-skills.sh",
