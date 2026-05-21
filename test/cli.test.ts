@@ -134,12 +134,12 @@ test("routes organization webhook deliveries through organization settings", () 
   );
 });
 
-test("repository routing overrides organization settings when repository routing is active", () => {
+test("repository webhook routing overrides organization settings when active", () => {
   assert.deepEqual(
     resolveRoutingTarget({
       repositories: [{
         fullName: "patinaproject/codex-github-router",
-        enabled: false,
+        enabled: true,
         issueAutomationEnabled: true,
       }],
       organizations: [{
@@ -151,8 +151,8 @@ test("repository routing overrides organization settings when repository routing
   );
 });
 
-test("organization issue automation routes even when organization webhooks are disabled", () => {
-  assert.deepEqual(
+test("issue automation alone does not route generic Codex inbox delivery", () => {
+  assert.equal(
     resolveRoutingTarget({
       organizations: [{
         login: "patinaproject",
@@ -160,7 +160,7 @@ test("organization issue automation routes even when organization webhooks are d
         issueAutomationEnabled: true,
       }],
     }, "patinaproject/codex-github-router"),
-    { kind: "organization", name: "patinaproject" },
+    null,
   );
 });
 

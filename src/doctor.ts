@@ -45,7 +45,7 @@ export async function doctor({ env = process.env }: { env?: NodeJS.ProcessEnv } 
     auth,
     config: {
       present: Boolean(config),
-      setupRequired: !config,
+      setupRequired: Boolean(config?.setupRequired ?? !config),
     },
     secrets: credentialStoreStatus(process.platform),
   };

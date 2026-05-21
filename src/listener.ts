@@ -43,7 +43,7 @@ function eventAction(payload: Record<string, unknown>): string | undefined {
 }
 
 function shouldIgnoreEvent(event: string, payload: Record<string, unknown>): boolean {
-  return event === "pull_request" && eventAction(payload) === "synchronize";
+  return event === "pull_request";
 }
 
 export function createWebhookServer({

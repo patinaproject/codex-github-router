@@ -170,8 +170,8 @@ test("discovers all authenticated organizations with gh pagination", async () =>
     }
     return {
       stdout: JSON.stringify([
-        { login: "owner-a" },
-        { login: "owner-b" },
+        [{ login: "owner-a" }],
+        [{ login: "owner-b" }],
       ]),
       stderr: "",
     };
@@ -181,7 +181,7 @@ test("discovers all authenticated organizations with gh pagination", async () =>
     { id: "owner-a", label: "owner-a" },
     { id: "owner-b", label: "owner-b" },
   ]);
-  assert.deepEqual(calls.find((call) => call.args[0] === "api")?.args, ["api", "--paginate", "user/orgs"]);
+  assert.deepEqual(calls.find((call) => call.args[0] === "api")?.args, ["api", "--paginate", "--slurp", "user/orgs"]);
 });
 
 test("organization-covered repositories do not create repository webhooks by default", async () => {

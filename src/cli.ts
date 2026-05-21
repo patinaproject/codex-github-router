@@ -417,7 +417,7 @@ export function resolveRoutingTarget(config: RouterConfig | null, fullName: stri
 }
 
 function hasActiveRouting(record: Record<string, unknown>): boolean {
-  return record.enabled === true || record.issueAutomationEnabled === true;
+  return record.enabled === true;
 }
 
 function isHookId(value: unknown): value is number | string {

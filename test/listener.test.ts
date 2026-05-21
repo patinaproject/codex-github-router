@@ -86,8 +86,8 @@ test("accepts GitHub ping health-check events", async () => {
   }
 });
 
-test("quietly ignores pull request synchronize events from branch pushes", async () => {
-  const body = JSON.stringify({ action: "synchronize", repository: { full_name: "owner/repo" } });
+test("quietly ignores pull request lifecycle events", async () => {
+  const body = JSON.stringify({ action: "opened", repository: { full_name: "owner/repo" } });
   let routed = false;
   const server = createWebhookServer({
     mode: "localhost",
@@ -107,7 +107,7 @@ test("quietly ignores pull request synchronize events from branch pushes", async
       ok: true,
       ignored: true,
       event: "pull_request",
-      action: "synchronize",
+      action: "opened",
       deliveryId: "delivery-1",
     });
     assert.equal(routed, false);

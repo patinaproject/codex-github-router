@@ -65,11 +65,12 @@ async function defaultSetupExecFile(file: string, args: readonly string[]): Prom
 export async function discoverGitHubTargets(runExecFile: SetupExecFile = defaultSetupExecFile): Promise<SetupTargets> {
   const [repos, orgs] = await Promise.all([
     runExecFile("gh", ["repo", "list", "--limit", "100", "--json", "nameWithOwner"]),
-    runExecFile("gh", ["api", "--paginate", "user/orgs"]),
+    runExecFile("gh", ["api", "--paginate", "--slurp", "user/orgs"]),
   ]);
 
   const parsedRepos = JSON.parse(repos.stdout) as Array<{ nameWithOwner?: string }>;
-  const parsedOrgs = JSON.parse(orgs.stdout) as Array<{ login?: string }>;
+  const parsedOrgPages = JSON.parse(orgs.stdout) as Array<Array<{ login?: string }>>;
+  const parsedOrgs = parsedOrgPages.flat();
   const organizations = parsedOrgs
     .filter((org): org is { login: string } => typeof org.login === "string")
     .map((org) => ({ id: org.login, label: org.login }));

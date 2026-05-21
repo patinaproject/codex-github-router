@@ -215,7 +215,7 @@ async function readCodexSession(file: string): Promise<Omit<CodexSession, "mtime
       const payload = objectField(parsed, "payload");
       const threadId = stringField(payload, "id");
       const cwd = stringField(payload, "cwd");
-      if (threadId && cwd) {
+      if (threadId && cwd && !isSubagentSession(payload)) {
         return { threadId, cwd };
       }
     } catch {
@@ -223,6 +223,13 @@ async function readCodexSession(file: string): Promise<Omit<CodexSession, "mtime
     }
   }
   return null;
+}
+
+function isSubagentSession(payload: Record<string, unknown> | undefined): boolean {
+  if (stringField(payload, "thread_source") === "subagent") {
+    return true;
+  }
+  return Boolean(objectField(objectField(payload, "source"), "subagent"));
 }
 
 async function inspectCodexSession(session: CodexSession, execFile: ExecFile): Promise<CodexGitSession | null> {
@@ -342,6 +349,8 @@ function startCodexTurn({
   let buffer = Buffer.alloc(0);
   let resumed = false;
   let settled = false;
+  let compacting = false;
+  let retriedAfterCompaction = false;
   let turnId: string | null = null;
   const pendingRequests = new Map<string, string>();
 
@@ -354,6 +363,17 @@ function startCodexTurn({
 
   function notify(method: string, params: Record<string, unknown> = {}): void {
     child.stdin.write(`${JSON.stringify({ method, params })}\n`);
+  }
+
+  function requestTurnStart(): void {
+    request("turn/start", {
+      threadId,
+      input: [{
+        type: "text",
+        text: message,
+        text_elements: [],
+      }],
+    });
   }
 
   return new Promise((resolve, reject) => {
@@ -468,14 +488,18 @@ function startCodexTurn({
       const thread = objectField(result, "thread");
       if (stringField(thread, "id") === threadId && !resumed) {
         resumed = true;
-        request("turn/start", {
-          threadId,
-          input: [{
-            type: "text",
-            text: message,
-            text_elements: [],
-          }],
-        });
+        requestTurnStart();
+        return;
+      }
+
+      if (messageJson.method === "thread/compacted") {
+        const params = objectField(messageJson, "params");
+        if (compacting && stringField(params, "threadId") === threadId) {
+          compacting = false;
+          retriedAfterCompaction = true;
+          turnId = null;
+          requestTurnStart();
+        }
         return;
       }
 
@@ -493,6 +517,11 @@ function startCodexTurn({
           const completedTurnId = stringField(completedTurn, "id") ?? turnId;
           const status = stringField(completedTurn, "status") ?? "unknown";
           if (!turnId || completedTurnId === turnId) {
+            if (status === "failed" && !retriedAfterCompaction && hasContextWindowExceeded(completedTurn)) {
+              compacting = true;
+              request("thread/compact/start", { threadId });
+              return;
+            }
             shutdown();
             if (completedTurnId) {
               resolveOnce(completedTurnId);
@@ -545,6 +574,12 @@ function objectField(value: Record<string, unknown> | undefined, key: string): R
 function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
   const field = value?.[key];
   return typeof field === "string" && field.length > 0 ? field : undefined;
+}
+
+function hasContextWindowExceeded(turn: Record<string, unknown> | undefined): boolean {
+  const error = objectField(turn, "error");
+  const codexErrorInfo = error?.codexErrorInfo;
+  return codexErrorInfo === "contextWindowExceeded";
 }
 
 function numberField(value: Record<string, unknown> | undefined, key: string): number | undefined {
