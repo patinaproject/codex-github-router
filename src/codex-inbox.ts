@@ -1,4 +1,5 @@
 import { execFile as nodeExecFile, spawn as nodeSpawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import os from "node:os";
@@ -8,9 +9,12 @@ import type { Readable, Writable } from "node:stream";
 
 const execFileAsync = promisify(nodeExecFile);
 const DEFAULT_EXCERPT_LENGTH = 500;
-const DEFAULT_CODEX_APP_SERVER_BIN = "codex";
+const DEFAULT_DESKTOP_CODEX_APP_SERVER_BIN = "/Applications/Codex.app/Contents/Resources/codex";
+const FALLBACK_CODEX_APP_SERVER_BIN = "codex";
 const DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_SESSION_SCAN_DAYS = 14;
+const CODEX_APP_SERVER_LISTEN_MODE = "listen";
+const CODEX_APP_SERVER_PROXY_MODE = "proxy";
 
 type ExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 type AppServerProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -33,6 +37,9 @@ export interface CodexInboxResult {
   delivered: boolean;
   threadId?: string | undefined;
   turnId?: string | undefined;
+  agentMessage?: string | undefined;
+  appServerBin?: string | undefined;
+  appServerVersion?: string | undefined;
   reason?: string | undefined;
 }
 
@@ -40,6 +47,7 @@ export interface CodexInboxOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   execFile?: ExecFile;
+  appServerLog?: ((message: string) => void) | undefined;
   spawnProcess?: SpawnProcess;
 }
 
@@ -51,13 +59,33 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
   }
 
   const notification = buildCodexInboxNotification(event);
-  const turnId = await startCodexTurn({
-    env: options.env,
-    message: notification.description,
-    spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
+  const codexBin = resolveCodexAppServerBin(options.env);
+  const appServerArgs = resolveCodexAppServerArgs(options.env);
+  const codexVersion = options.spawnProcess ? null : await codexAppServerVersion(codexBin, execFile);
+  let turn: CodexTurnResult;
+  try {
+    turn = await startCodexTurn({
+      appServerArgs,
+      codexBin,
+      codexVersion,
+      env: options.env,
+      log: options.appServerLog,
+      message: notification.description,
+      spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
+      threadId: thread.threadId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`thread ${thread.threadId}: ${message}`);
+  }
+  return {
+    delivered: true,
     threadId: thread.threadId,
-  });
-  return { delivered: true, threadId: thread.threadId, turnId };
+    turnId: turn.turnId,
+    ...(turn.agentMessage ? { agentMessage: turn.agentMessage } : {}),
+    appServerBin: codexBin,
+    ...(codexVersion ? { appServerVersion: codexVersion } : {}),
+  };
 }
 
 export function buildCodexInboxNotification(event: CodexInboxEvent): { title: string; description: string } {
@@ -88,7 +116,7 @@ export function buildCodexInboxNotification(event: CodexInboxEvent): { title: st
 }
 
 async function findCodexThread(event: CodexInboxEvent, options: CodexInboxOptions, execFile: ExecFile): Promise<{ threadId: string | null; reason?: string }> {
-  const explicitThreadId = options.env.CODEX_THREAD_ID;
+  const explicitThreadId = options.env.CODEX_GITHUB_ROUTER_THREAD_ID;
   if (explicitThreadId) {
     return { threadId: explicitThreadId };
   }
@@ -154,6 +182,11 @@ interface CodexSession {
 interface CodexGitSession extends CodexSession {
   repo: string;
   branch: string;
+}
+
+interface CodexTurnResult {
+  turnId: string;
+  agentMessage?: string | undefined;
 }
 
 async function recentCodexSessions(env: NodeJS.ProcessEnv): Promise<CodexSession[]> {
@@ -325,33 +358,43 @@ function codexSessionsRoot(env: NodeJS.ProcessEnv): string {
 }
 
 function startCodexTurn({
+  appServerArgs,
+  codexBin,
+  codexVersion,
   env,
+  log,
   message,
   spawnProcess,
   threadId,
 }: {
+  appServerArgs: readonly string[];
+  codexBin: string;
+  codexVersion: string | null;
   env: NodeJS.ProcessEnv;
+  log?: ((message: string) => void) | undefined;
   message: string;
   spawnProcess: SpawnProcess;
   threadId: string;
-}): Promise<string> {
-  const codexBin = env.CODEX_APP_SERVER_BIN ?? DEFAULT_CODEX_APP_SERVER_BIN;
+}): Promise<CodexTurnResult> {
+  const appServerCommand = `${codexBin} ${appServerArgs.join(" ")}`;
+  const appServerLabel = `Codex app-server ${appServerCommand}${codexVersion ? ` (${codexVersion})` : ""}`;
   const timeoutMs = Number(env.CODEX_APP_SERVER_TIMEOUT_MS ?? DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS);
-  const child = spawnProcess(codexBin, ["app-server", "--listen", "stdio://"], {
-    env: {
-      ...env,
-      PATH: env.PATH ? `/opt/homebrew/bin:/usr/local/bin:${env.PATH}` : "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      TERM: env.TERM ?? "xterm-256color",
-    },
+  logAppServer(log, `using ${codexBin}${codexVersion ? ` (${codexVersion})` : ""}`);
+  logAppServer(log, `spawn ${appServerCommand}`);
+  const child = spawnProcess(codexBin, appServerArgs, {
+    env: codexAppServerEnv(env),
     stdio: ["pipe", "pipe", "pipe"],
   });
   let nextId = 1;
   let buffer = Buffer.alloc(0);
+  let stderrBuffer = "";
   let resumed = false;
   let settled = false;
   let compacting = false;
+  let waitingForActiveTurn = false;
   let retriedAfterCompaction = false;
   let turnId: string | null = null;
+  let agentMessage = "";
   const pendingRequests = new Map<string, string>();
 
   function request(method: string, params: Record<string, unknown> = {}): void {
@@ -359,19 +402,21 @@ function startCodexTurn({
     nextId += 1;
     pendingRequests.set(id, method);
     child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+    logAppServer(log, `-> request ${method} id=${id}${summarizeAppServerParams(params)}`);
   }
 
   function notify(method: string, params: Record<string, unknown> = {}): void {
     child.stdin.write(`${JSON.stringify({ method, params })}\n`);
+    logAppServer(log, `-> notification ${method}${summarizeAppServerParams(params)}`);
   }
 
   function requestTurnStart(): void {
+    waitingForActiveTurn = false;
     request("turn/start", {
       threadId,
       input: [{
         type: "text",
         text: message,
-        text_elements: [],
       }],
     });
   }
@@ -388,13 +433,13 @@ function startCodexTurn({
       reject(error);
     }
 
-    function resolveOnce(startedTurnId: string): void {
+    function resolveOnce(result: CodexTurnResult): void {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timeout);
-      resolve(startedTurnId);
+      resolve(result);
     }
 
     function shutdown(): void {
@@ -403,7 +448,7 @@ function startCodexTurn({
     }
 
     const timeout = setTimeout(() => {
-      rejectOnce(new Error(`Timed out waiting for Codex app-server turn start after ${timeoutMs}ms`));
+      rejectOnce(new Error(`Timed out waiting for ${appServerLabel} turn completion after ${timeoutMs}ms`));
     }, timeoutMs);
 
     child.once("error", (error) => {
@@ -411,7 +456,7 @@ function startCodexTurn({
     });
     child.once("exit", (code) => {
       if (!settled) {
-        rejectOnce(new Error(`Codex app-server exited before starting a turn with code ${code ?? "unknown"}`));
+        rejectOnce(new Error(`${appServerLabel} exited before starting a turn with code ${code ?? "unknown"}${stderrBuffer ? `: ${excerpt(stderrBuffer)}` : ""}`));
       }
     });
     child.stdout.on("data", (chunk: Buffer) => {
@@ -420,7 +465,11 @@ function startCodexTurn({
         handleMessageBody(body);
       }
     });
-    child.stderr.on("data", () => {});
+    child.stderr.on("data", (chunk: Buffer) => {
+      const stderr = chunk.toString("utf8");
+      stderrBuffer = `${stderrBuffer}${stderr}`;
+      logAppServer(log, `stderr: ${excerpt(stderr)}`);
+    });
 
     function takeJsonMessages(): string[] {
       const messages: string[] = [];
@@ -477,6 +526,11 @@ function startCodexTurn({
       if (id) {
         pendingRequests.delete(id);
       }
+      if (responseMethod) {
+        logAppServer(log, `<- response id=${id ?? "unknown"} for ${responseMethod}${summarizeAppServerResult(messageJson)}`);
+      } else if (typeof messageJson.method === "string") {
+        logAppServer(log, `<- notification ${messageJson.method}${summarizeAppServerNotification(messageJson)}`);
+      }
 
       if (responseMethod === "initialize") {
         notify("initialized");
@@ -488,6 +542,12 @@ function startCodexTurn({
       const thread = objectField(result, "thread");
       if (stringField(thread, "id") === threadId && !resumed) {
         resumed = true;
+        const status = objectField(thread, "status");
+        if (stringField(status, "type") === "active") {
+          waitingForActiveTurn = true;
+          logAppServer(log, `thread ${threadId} is active; queueing delivery until the active turn completes`);
+          return;
+        }
         requestTurnStart();
         return;
       }
@@ -498,7 +558,16 @@ function startCodexTurn({
           compacting = false;
           retriedAfterCompaction = true;
           turnId = null;
+          agentMessage = "";
           requestTurnStart();
+        }
+        return;
+      }
+
+      if (messageJson.method === "item/agentMessage/delta") {
+        const params = objectField(messageJson, "params");
+        if (stringField(params, "threadId") === threadId && stringField(params, "turnId") === turnId) {
+          agentMessage = `${agentMessage}${stringField(params, "delta") ?? ""}`;
         }
         return;
       }
@@ -507,6 +576,7 @@ function startCodexTurn({
       const startedTurnId = stringField(turn, "id");
       if (startedTurnId && !turnId) {
         turnId = startedTurnId;
+        logAppServer(log, `turn started ${startedTurnId}`);
         return;
       }
 
@@ -516,17 +586,30 @@ function startCodexTurn({
           const completedTurn = objectField(params, "turn");
           const completedTurnId = stringField(completedTurn, "id") ?? turnId;
           const status = stringField(completedTurn, "status") ?? "unknown";
-          if (!turnId || completedTurnId === turnId) {
+          if (waitingForActiveTurn && !turnId) {
+            logAppServer(log, `active turn completed ${completedTurnId ?? "unknown"} status=${status}; starting queued delivery`);
+            requestTurnStart();
+            return;
+          }
+          if (turnId && completedTurnId === turnId) {
+            logAppServer(log, `turn completed ${completedTurnId ?? "unknown"} status=${status}`);
             if (status === "failed" && !retriedAfterCompaction && hasContextWindowExceeded(completedTurn)) {
               compacting = true;
               request("thread/compact/start", { threadId });
               return;
             }
             shutdown();
-            if (completedTurnId) {
-              resolveOnce(completedTurnId);
+            if (completedTurnId && status === "completed") {
+              const trimmedAgentMessage = agentMessage.trim();
+              if (trimmedAgentMessage) {
+                logAppServer(log, `agent response: ${excerpt(trimmedAgentMessage)}`);
+              }
+              resolveOnce({
+                turnId: completedTurnId,
+                ...(trimmedAgentMessage ? { agentMessage: trimmedAgentMessage } : {}),
+              });
             } else {
-              rejectOnce(new Error(`Codex turn ${completedTurnId ?? "unknown"} completed with status ${status}`));
+              rejectOnce(new Error(`${appServerLabel} turn ${completedTurnId ?? "unknown"} completed with status ${status}${turnErrorDetails(completedTurn)}`));
             }
           }
         }
@@ -543,7 +626,6 @@ function startCodexTurn({
         experimentalApi: true,
         optOutNotificationMethods: [
           "command/exec/outputDelta",
-          "item/agentMessage/delta",
           "item/plan/delta",
           "item/fileChange/outputDelta",
           "item/reasoning/summaryTextDelta",
@@ -552,6 +634,110 @@ function startCodexTurn({
       },
     });
   });
+}
+
+function resolveCodexAppServerBin(env: NodeJS.ProcessEnv): string {
+  if (env.CODEX_APP_SERVER_BIN) {
+    return env.CODEX_APP_SERVER_BIN;
+  }
+
+  const desktopBin = env.CODEX_DESKTOP_APP_SERVER_BIN ?? DEFAULT_DESKTOP_CODEX_APP_SERVER_BIN;
+  return existsSync(desktopBin) ? desktopBin : FALLBACK_CODEX_APP_SERVER_BIN;
+}
+
+function resolveCodexAppServerArgs(env: NodeJS.ProcessEnv): readonly string[] {
+  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_PROXY_MODE || env.CODEX_APP_SERVER_SOCK) {
+    const args = ["app-server", "proxy"];
+    if (env.CODEX_APP_SERVER_SOCK) {
+      args.push("--sock", env.CODEX_APP_SERVER_SOCK);
+    }
+    return args;
+  }
+
+  return ["app-server", "--listen", "stdio://"];
+}
+
+async function codexAppServerVersion(codexBin: string, execFile: ExecFile): Promise<string | null> {
+  try {
+    const result = await execFile(codexBin, ["--version"]);
+    return result.stdout.trim() || result.stderr.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function codexAppServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const nextEnv: NodeJS.ProcessEnv = {
+    ...env,
+    PATH: env.PATH ? `/opt/homebrew/bin:/usr/local/bin:${env.PATH}` : "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    TERM: env.TERM ?? "xterm-256color",
+  };
+  delete nextEnv.CODEX_THREAD_ID;
+  return nextEnv;
+}
+
+function turnErrorDetails(turn: Record<string, unknown> | undefined): string {
+  const error = objectField(turn, "error");
+  if (!error) {
+    return "";
+  }
+  return `: ${excerpt(JSON.stringify(error))}`;
+}
+
+function logAppServer(log: ((message: string) => void) | undefined, message: string): void {
+  log?.(`[codex-app-server] ${message}`);
+}
+
+function summarizeAppServerParams(params: Record<string, unknown>): string {
+  const details: string[] = [];
+  const threadId = stringField(params, "threadId");
+  if (threadId) {
+    details.push(`thread=${threadId}`);
+  }
+  const turnId = stringField(params, "turnId");
+  if (turnId) {
+    details.push(`turn=${turnId}`);
+  }
+  const input = params.input;
+  if (Array.isArray(input)) {
+    details.push(`input=${input.length} item${input.length === 1 ? "" : "s"}`);
+  }
+  return details.length > 0 ? ` ${details.join(" ")}` : "";
+}
+
+function summarizeAppServerResult(messageJson: Record<string, unknown>): string {
+  const result = objectField(messageJson, "result");
+  const thread = objectField(result, "thread");
+  const turn = objectField(result, "turn");
+  const details: string[] = [];
+  const threadId = stringField(thread, "id");
+  if (threadId) {
+    details.push(`thread=${threadId}`);
+  }
+  const turnId = stringField(turn, "id");
+  if (turnId) {
+    details.push(`turn=${turnId}`);
+  }
+  return details.length > 0 ? ` ${details.join(" ")}` : "";
+}
+
+function summarizeAppServerNotification(messageJson: Record<string, unknown>): string {
+  const params = objectField(messageJson, "params");
+  const turn = objectField(params, "turn");
+  const details: string[] = [];
+  const threadId = stringField(params, "threadId");
+  if (threadId) {
+    details.push(`thread=${threadId}`);
+  }
+  const turnId = stringField(turn, "id") ?? stringField(params, "turnId");
+  if (turnId) {
+    details.push(`turn=${turnId}`);
+  }
+  const status = stringField(turn, "status");
+  if (status) {
+    details.push(`status=${status}`);
+  }
+  return details.length > 0 ? ` ${details.join(" ")}` : "";
 }
 
 function defaultSpawnProcess(file: string, args: readonly string[], options: {

@@ -45,6 +45,21 @@ async function writeAppServerResponses(child: ReturnType<typeof createAppServerP
   child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`);
 }
 
+async function writeAppServerResponsesWithAgentMessage(child: ReturnType<typeof createAppServerProcess>, threadId: string, turnId: string): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "2", result: { thread: { id: threadId } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "3", result: { turn: { id: turnId } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "item-1", delta: "Acknowledged. " } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "item-1", delta: "No follow-up needed." } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`);
+}
+
 async function writeFailedAppServerTurn(child: ReturnType<typeof createAppServerProcess>, threadId: string, turnId: string): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
@@ -54,6 +69,28 @@ async function writeFailedAppServerTurn(child: ReturnType<typeof createAppServer
   child.stdout.write(`${JSON.stringify({ id: "3", result: { turn: { id: turnId } } })}\n`);
   await new Promise((resolve) => setImmediate(resolve));
   child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "failed" } } })}\n`);
+}
+
+async function writeActiveTurnQueueResponses(child: ReturnType<typeof createAppServerProcess>, threadId: string): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({
+    id: "2",
+    result: {
+      thread: {
+        id: threadId,
+        status: { type: "active" },
+        turns: [{ id: "turn-active", status: "inProgress" }],
+      },
+    },
+  })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: "turn-active", status: "completed" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ id: "3", result: { turn: { id: "turn-queued" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: "turn-queued", status: "completed" } } })}\n`);
 }
 
 async function writeCompactedRetryAppServerTurn(child: ReturnType<typeof createAppServerProcess>, threadId: string): Promise<void> {
@@ -111,7 +148,7 @@ test("builds a Codex inbox notification from an issue comment delivery", () => {
   assert.match(notification.description, /leave a test comment on our PR/);
 });
 
-test("delivers to explicit Codex thread ID when available", async () => {
+test("delivers to explicit router Codex thread ID when available", async () => {
   const calls: Array<{ file: string; args: readonly string[] }> = [];
   const child = createAppServerProcess();
   const delivery = deliverToCodexInbox({
@@ -124,7 +161,7 @@ test("delivers to explicit Codex thread ID when available", async () => {
     },
   }, {
     cwd: "/repo",
-    env: { HOME: "/home/test", CODEX_THREAD_ID: "thread-123" },
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
     execFile: async (file, args) => {
       calls.push({ file, args });
       return { stdout: "", stderr: "" };
@@ -137,7 +174,12 @@ test("delivers to explicit Codex thread ID when available", async () => {
   await writeAppServerResponses(child, "thread-123", "turn-123");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-123", turnId: "turn-123" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-123",
+    turnId: "turn-123",
+    appServerBin: "codex",
+  });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.file, "codex");
   assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
@@ -146,9 +188,72 @@ test("delivers to explicit Codex thread ID when available", async () => {
   assert.match(child.stdinLines[2] ?? "", new RegExp('"method":"thread/resume"'));
   assert.match(child.stdinLines[3] ?? "", new RegExp('"method":"turn/start"'));
   assert.match(child.stdinLines[3] ?? "", /Received issue_comment delivery/);
+  assert.doesNotMatch(child.stdinLines[3] ?? "", /text_elements/);
 });
 
-test("treats a started Codex turn as delivered even if the later turn fails", async () => {
+test("logs app-server JSON-RPC interactions without message bodies", async () => {
+  const child = createAppServerProcess();
+  const logs: string[] = [];
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "sensitive PR comment body" },
+    },
+  }, {
+    cwd: "/repo",
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    appServerLog: (message) => logs.push(message),
+    execFile: async () => ({ stdout: "", stderr: "" }),
+    spawnProcess: () => child,
+  });
+  await writeAppServerResponses(child, "thread-123", "turn-123");
+  await delivery;
+
+  assert.match(logs.join("\n"), /\[codex-app-server\] spawn codex app-server --listen stdio:\/\//);
+  assert.match(logs.join("\n"), /-> request initialize id=1/);
+  assert.match(logs.join("\n"), /-> request thread\/resume id=2 thread=thread-123/);
+  assert.match(logs.join("\n"), /-> request turn\/start id=3 thread=thread-123 input=1 item/);
+  assert.match(logs.join("\n"), /<- response id=3 for turn\/start turn=turn-123/);
+  assert.match(logs.join("\n"), /<- notification turn\/completed thread=thread-123 turn=turn-123 status=completed/);
+  assert.doesNotMatch(logs.join("\n"), /sensitive PR comment body/);
+});
+
+test("returns and logs the completed Codex agent response", async () => {
+  const child = createAppServerProcess();
+  const logs: string[] = [];
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "please acknowledge" },
+    },
+  }, {
+    cwd: "/repo",
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    appServerLog: (message) => logs.push(message),
+    execFile: async () => ({ stdout: "", stderr: "" }),
+    spawnProcess: () => child,
+  });
+  await writeAppServerResponsesWithAgentMessage(child, "thread-123", "turn-123");
+  const result = await delivery;
+
+  assert.equal(result.agentMessage, "Acknowledged. No follow-up needed.");
+  assert.match(logs.join("\n"), /<- notification item\/agentMessage\/delta thread=thread-123 turn=turn-123/);
+  assert.match(logs.join("\n"), /agent response: Acknowledged\. No follow-up needed\./);
+  assert.doesNotMatch(logs.join("\n"), /please acknowledge/);
+});
+
+test("prefers the Codex Desktop app-server binary when it exists", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const desktopBin = path.join(home, "Codex.app", "Contents", "Resources", "codex");
+  await mkdir(path.dirname(desktopBin), { recursive: true });
+  await writeFile(desktopBin, "");
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
   const child = createAppServerProcess();
   const delivery = deliverToCodexInbox({
     event: "issue_comment",
@@ -160,14 +265,199 @@ test("treats a started Codex turn as delivered even if the later turn fails", as
     },
   }, {
     cwd: "/repo",
-    env: { HOME: "/home/test", CODEX_THREAD_ID: "thread-123" },
+    env: {
+      CODEX_DESKTOP_APP_SERVER_BIN: desktopBin,
+      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
+      HOME: "/home/test",
+    },
+    execFile: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "", stderr: "" };
+    },
+    spawnProcess: (file, args) => {
+      calls.push({ file, args });
+      return child;
+    },
+  });
+  await writeAppServerResponses(child, "thread-123", "turn-123");
+  const result = await delivery;
+
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-123",
+    turnId: "turn-123",
+    appServerBin: desktopBin,
+  });
+  assert.equal(calls[0]?.file, desktopBin);
+  assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
+});
+
+test("can explicitly request direct stdio listen mode", async () => {
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: {
+      CODEX_APP_SERVER_BIN: "codex",
+      CODEX_APP_SERVER_MODE: "listen",
+      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
+      HOME: "/home/test",
+    },
+    execFile: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "", stderr: "" };
+    },
+    spawnProcess: (file, args) => {
+      calls.push({ file, args });
+      return child;
+    },
+  });
+  await writeAppServerResponses(child, "thread-123", "turn-123");
+  await delivery;
+
+  assert.equal(calls[0]?.file, "codex");
+  assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
+});
+
+test("passes a configured Desktop app-server Unix socket to proxy mode", async () => {
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: {
+      CODEX_APP_SERVER_BIN: "codex",
+      CODEX_APP_SERVER_MODE: "proxy",
+      CODEX_APP_SERVER_SOCK: "/tmp/codex-ipc/ipc-test.sock",
+      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
+      HOME: "/home/test",
+    },
+    execFile: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "", stderr: "" };
+    },
+    spawnProcess: (file, args) => {
+      calls.push({ file, args });
+      return child;
+    },
+  });
+  await writeAppServerResponses(child, "thread-123", "turn-123");
+  await delivery;
+
+  assert.deepEqual(calls[0]?.args, ["app-server", "proxy", "--sock", "/tmp/codex-ipc/ipc-test.sock"]);
+});
+
+test("ignores ambient Codex thread ID when launched from Codex", async () => {
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
+  let spawnedEnv: NodeJS.ProcessEnv | undefined;
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_THREAD_ID: "thread-launcher" },
+    execFile: async (file, args) => {
+      calls.push({ file, args });
+      if (file === "git") {
+        return { stdout: "feature-branch\n", stderr: "" };
+      }
+      if (file === "sqlite3") {
+        return { stdout: "thread-matched\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    spawnProcess: (file, args, options) => {
+      calls.push({ file, args });
+      spawnedEnv = options.env;
+      return child;
+    },
+  });
+  await writeAppServerResponses(child, "thread-matched", "turn-matched");
+  const result = await delivery;
+
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-matched",
+    turnId: "turn-matched",
+    appServerBin: "codex",
+  });
+  assert.match(child.stdinLines[2] ?? "", /"threadId":"thread-matched"/);
+  assert.doesNotMatch(child.stdinLines[2] ?? "", /thread-launcher/);
+  assert.equal(spawnedEnv?.CODEX_THREAD_ID, undefined);
+});
+
+test("rejects a started Codex turn that later fails", async () => {
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
   });
   await writeFailedAppServerTurn(child, "thread-123", "turn-123");
+
+  await assert.rejects(delivery, /thread thread-123: Codex app-server codex app-server --listen stdio:\/\/ turn turn-123 completed with status failed/u);
+});
+
+test("queues delivery until an active Codex turn completes", async () => {
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-active",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "active turn comment" },
+    },
+  }, {
+    cwd: "/repo",
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
+    execFile: async () => ({ stdout: "", stderr: "" }),
+    spawnProcess: () => child,
+  });
+  await writeActiveTurnQueueResponses(child, "thread-123");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-123", turnId: "turn-123" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-123",
+    turnId: "turn-queued",
+    appServerBin: "codex",
+  });
+  assert.match(child.stdinLines[2] ?? "", /"method":"thread\/resume"/);
+  assert.match(child.stdinLines[3] ?? "", /"method":"turn\/start"/);
+  assert.match(child.stdinLines[3] ?? "", /Received issue_comment delivery delivery-active/);
+  assert.equal(child.stdinLines.filter((line) => line.includes('"method":"turn/start"')).length, 1);
+  assert.equal(child.stdinLines.some((line) => line.includes('"method":"turn/steer"')), false);
 });
 
 test("compacts and retries when a routed Codex turn exceeds the context window", async () => {
@@ -182,14 +472,19 @@ test("compacts and retries when a routed Codex turn exceeds the context window",
     },
   }, {
     cwd: "/repo",
-    env: { HOME: "/home/test", CODEX_THREAD_ID: "thread-123" },
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" },
     execFile: async () => ({ stdout: "", stderr: "" }),
     spawnProcess: () => child,
   });
   await writeCompactedRetryAppServerTurn(child, "thread-123");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-123", turnId: "turn-retry" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-123",
+    turnId: "turn-retry",
+    appServerBin: "codex",
+  });
   assert.match(child.stdinLines[4] ?? "", /"method":"thread\/compact\/start"/);
   assert.match(child.stdinLines[5] ?? "", /"method":"turn\/start"/);
   assert.match(child.stdinLines[5] ?? "", /Received issue_comment delivery/);
@@ -207,7 +502,7 @@ test("discovers the latest matching Codex thread from local state", async () => 
     },
   }, {
     cwd: "/repo",
-    env: { HOME: "/home/test" },
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test" },
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "git") {
@@ -226,7 +521,12 @@ test("discovers the latest matching Codex thread from local state", async () => 
   await writeAppServerResponses(child, "thread-456", "turn-456");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-456", turnId: "turn-456" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-456",
+    turnId: "turn-456",
+    appServerBin: "codex",
+  });
   assert.equal(calls.filter((call) => call.file === "sqlite3").length, 1);
   assert.match(String(calls[1]?.args[1]), /git_branch = 'feature-branch'/);
   assert.equal(calls[2]?.file, "codex");
@@ -267,7 +567,7 @@ test("routes pull request comments to the Codex session for the PR head branch",
     },
   }, {
     cwd: "/repos/router-main",
-    env: { HOME: home },
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: home },
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "gh") {
@@ -295,7 +595,12 @@ test("routes pull request comments to the Codex session for the PR head branch",
   await writeAppServerResponses(child, "thread-pr", "turn-pr");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-pr", turnId: "turn-pr" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-pr",
+    turnId: "turn-pr",
+    appServerBin: "codex",
+  });
   assert.match(child.stdinLines[2] ?? "", /"threadId":"thread-pr"/);
 });
 
@@ -341,7 +646,7 @@ test("ignores subagent sessions when routing pull request comments", async () =>
     },
   }, {
     cwd: "/repos/router",
-    env: { HOME: home },
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: home },
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "gh") {
@@ -363,7 +668,12 @@ test("ignores subagent sessions when routing pull request comments", async () =>
   await writeAppServerResponses(child, "thread-human", "turn-human");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-human", turnId: "turn-human" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-human",
+    turnId: "turn-human",
+    appServerBin: "codex",
+  });
   assert.match(child.stdinLines[2] ?? "", /"threadId":"thread-human"/);
 });
 
@@ -396,7 +706,7 @@ test("routes pull request reviews using the payload PR head branch", async () =>
     },
   }, {
     cwd: "/repos/router-main",
-    env: { HOME: home },
+    env: { CODEX_APP_SERVER_BIN: "codex", HOME: home },
     execFile: async (file, args) => {
       calls.push({ file, args });
       if (file === "git" && args[1] === "/repos/router-review" && args[2] === "remote") {
@@ -415,7 +725,12 @@ test("routes pull request reviews using the payload PR head branch", async () =>
   await writeAppServerResponses(child, "thread-review", "turn-review");
   const result = await delivery;
 
-  assert.deepEqual(result, { delivered: true, threadId: "thread-review", turnId: "turn-review" });
+  assert.deepEqual(result, {
+    delivered: true,
+    threadId: "thread-review",
+    turnId: "turn-review",
+    appServerBin: "codex",
+  });
   assert.equal(calls.some((call) => call.file === "gh"), false);
 });
 

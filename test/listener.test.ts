@@ -161,6 +161,68 @@ test("acknowledges webhook deliveries even when async routing fails", async () =
   }
 });
 
+test("acknowledges valid webhook deliveries when cache persistence fails", async () => {
+  const body = "{}";
+  class FailingSaveCache extends DeliveryCache {
+    override async save(): Promise<void> {
+      throw new Error("cache write failed");
+    }
+  }
+  const cache = new FailingSaveCache();
+  let routed = false;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: cache,
+    onEvent: async () => {
+      routed = true;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issues",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issues", deliveryId: "delivery-1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(routed, true);
+    assert.equal(cache.has("delivery-1"), true);
+  } finally {
+    server.close();
+  }
+});
+
+test("acknowledges webhook deliveries when dedupe cache persistence fails", async () => {
+  const body = "{}";
+  const cache = new DeliveryCache();
+  cache.save = async () => {
+    throw new Error("disk full");
+  };
+  let attempts = 0;
+  const server = createWebhookServer({
+    mode: "localhost",
+    deliveryCache: cache,
+    onEvent: async () => {
+      attempts += 1;
+    },
+  });
+  const address = await listen(server);
+  try {
+    const response = await postJson(address, body, {
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "issues",
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, event: "issues", deliveryId: "delivery-1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(cache.has("delivery-1"), true);
+  } finally {
+    server.close();
+  }
+});
+
 test("acknowledges webhook deliveries before async routing completes", async () => {
   const body = "{}";
   let finishRouting: (() => void) | undefined;

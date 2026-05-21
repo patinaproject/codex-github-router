@@ -97,18 +97,12 @@ export function createWebhookServer({
       }
       const payload = parsePayload(body);
       if (shouldIgnoreEvent(event, payload)) {
-        if (deliveryId) {
-          deliveryCache?.add(deliveryId);
-          await deliveryCache?.save();
-        }
+        await rememberDelivery(deliveryCache, deliveryId);
         response.writeHead(202, { "content-type": "application/json" });
         response.end(JSON.stringify({ ok: true, ignored: true, event, action: eventAction(payload), deliveryId }));
         return;
       }
-      if (deliveryId) {
-        deliveryCache?.add(deliveryId);
-        await deliveryCache?.save();
-      }
+      await rememberDelivery(deliveryCache, deliveryId);
       response.writeHead(202, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, event, deliveryId }));
       Promise.resolve(onEvent?.({ event, deliveryId, payload })).catch(() => {});
@@ -119,6 +113,18 @@ export function createWebhookServer({
       response.end(JSON.stringify({ ok: false, error: { code: "bad_request", message } }));
     }
   });
+}
+
+async function rememberDelivery(deliveryCache: DeliveryCache | undefined, deliveryId: string | undefined): Promise<void> {
+  if (!deliveryCache || !deliveryId) {
+    return;
+  }
+  deliveryCache.add(deliveryId);
+  try {
+    await deliveryCache.save();
+  } catch {
+    return;
+  }
 }
 
 export function listen(server: http.Server, { port = 0, host = "127.0.0.1" }: { port?: number; host?: string } = {}): Promise<import("node:net").AddressInfo> {

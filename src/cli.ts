@@ -118,9 +118,16 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
         const result = await deliverToCodexInbox({ event, deliveryId, payload, route }, {
           cwd: context.cwd,
           env: context.env,
+          appServerLog: (message) => context.stderr.write(`${message}\n`),
         });
         if (result.delivered) {
-          context.stderr.write(`Started Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"}.\n`);
+          const appServer = result.appServerVersion
+            ? `${result.appServerBin ?? "unknown"} (${result.appServerVersion})`
+            : result.appServerBin ?? "unknown";
+          context.stderr.write(`Completed Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"} using ${appServer}.\n`);
+          if (result.agentMessage) {
+            context.stderr.write(`Codex response: ${result.agentMessage}\n`);
+          }
         } else {
           context.stderr.write(`Could not deliver ${event} delivery ${deliveryId ?? "unknown"} to Codex: ${result.reason ?? "unknown reason"}.\n`);
         }
