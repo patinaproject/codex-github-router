@@ -95,8 +95,8 @@ reference and stay within 72 characters.
 
 - Use the same format for PR titles as commit messages so squash merges can
   reuse the title directly.
-- Include a GitHub closing keyword such as `Closes #123` in the PR body unless
-  the PR is intentionally non-closing and the workflow allows it.
+- Include a GitHub issue link such as `Closes #123` or `Related to #123` in the
+  PR body. Prefer a closing keyword when the PR completes the issue.
 - Fill out `What changed` and `Verification` in the PR template.
 - Add `Testing steps` only when a human operator needs to verify something
   manually.

@@ -17,12 +17,12 @@
 
 ## Linked issue
 
-- At least one GitHub closing keyword is required for normal PRs:
-  `Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>`.
-- Add one closing-keyword line for each issue this PR completes.
-- `Related to #<issue>` / `Blocks #<issue>` / `Partially satisfies #<issue>`
-  are additional references, not replacements for the required closing keyword.
-  Include a short explanation when the relationship is not obvious.
+- At least one GitHub issue link is required for normal PRs:
+  `Closes #<issue>`, `Fixes #<issue>`, `Resolves #<issue>`,
+  `Related to #<issue>`, `Blocks #<issue>`, or
+  `Partially satisfies #<issue>`.
+- Prefer a closing keyword for each issue this PR completes.
+- Include a short explanation when the relationship is not obvious.
 
 ## What changed
 
