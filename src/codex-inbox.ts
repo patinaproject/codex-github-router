@@ -293,14 +293,23 @@ function startCodexTurn({
       const startedTurnId = stringField(turn, "id");
       if (startedTurnId && !turnId) {
         turnId = startedTurnId;
-        resolveOnce(startedTurnId);
         return;
       }
 
       if (messageJson.method === "turn/completed") {
         const params = objectField(messageJson, "params");
         if (stringField(params, "threadId") === threadId) {
-          shutdown();
+          const completedTurn = objectField(params, "turn");
+          const completedTurnId = stringField(completedTurn, "id") ?? turnId;
+          const status = stringField(completedTurn, "status") ?? "unknown";
+          if (!turnId || completedTurnId === turnId) {
+            shutdown();
+            if (status === "completed" && completedTurnId) {
+              resolveOnce(completedTurnId);
+            } else {
+              rejectOnce(new Error(`Codex turn ${completedTurnId ?? "unknown"} completed with status ${status}`));
+            }
+          }
         }
       }
     }
