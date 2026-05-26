@@ -38,8 +38,8 @@ npx codex-github-router
 
 ```text
 codex-github-router ready
-local  http://localhost:3000/webhook
-public https://router.example.com/webhook
+local  http://127.0.0.1:3000/webhooks/github
+public https://router.example.com/webhooks/github
 hook   https://github.com/organizations/patinaproject/settings/hooks/123
 
 [R] Reload webhooks  [S] Settings  [Q] Quit
