@@ -14,6 +14,7 @@ const FALLBACK_CODEX_APP_SERVER_BIN = "codex";
 const DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_SESSION_SCAN_DAYS = 14;
 const CODEX_APP_SERVER_STDIO_ARGS = ["app-server", "--listen", "stdio://"] as const;
+const activeCodexThreadDeliveries = new Map<string, Promise<void>>();
 
 type ExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 type AppServerProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -59,34 +60,55 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
       reason: thread.reason ?? "no matching Codex thread found",
     };
   }
+  const threadId = thread.threadId;
 
   const notification = buildCodexInboxNotification(event);
   const codexBin = resolveCodexAppServerBin(options.env);
   const codexVersion = options.spawnProcess ? null : await codexAppServerVersion(codexBin, execFile);
   let turn: CodexTurnResult;
   try {
-    turn = await startCodexTurn({
+    turn = await runWithCodexThreadDeliveryLock(threadId, () => startCodexTurn({
       codexBin,
       codexVersion,
       env: options.env,
       log: options.appServerLog,
       message: notification.description,
       spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
-      threadId: thread.threadId,
-    });
+      threadId,
+    }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`thread ${thread.threadId}: ${message}`);
+    throw new Error(`thread ${threadId}: ${message}`);
   }
 
   return {
     delivered: true,
-    threadId: thread.threadId,
+    threadId,
     turnId: turn.turnId,
     ...(turn.agentMessage ? { agentMessage: turn.agentMessage } : {}),
     appServerBin: codexBin,
     ...(codexVersion ? { appServerVersion: codexVersion } : {}),
   };
+}
+
+async function runWithCodexThreadDeliveryLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = activeCodexThreadDeliveries.get(threadId) ?? Promise.resolve();
+  let releaseCurrent: () => void = () => {};
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const next = previous.catch(() => undefined).then(() => current);
+  activeCodexThreadDeliveries.set(threadId, next);
+
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    releaseCurrent();
+    if (activeCodexThreadDeliveries.get(threadId) === next) {
+      activeCodexThreadDeliveries.delete(threadId);
+    }
+  }
 }
 
 export function buildCodexInboxNotification(event: CodexInboxEvent): { title: string; description: string } {
