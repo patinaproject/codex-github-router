@@ -30,6 +30,11 @@ The default mode starts a local listener and a managed ngrok tunnel.
 Pull request comments and reviews are routed to the local Codex session whose
 GitHub repository and PR head branch match the incoming activity.
 
+Delivery uses one path: the router starts `codex app-server --listen stdio://`,
+initializes the app-server protocol, resumes the target thread, starts a turn,
+and waits for `turn/completed`. Codex Desktop picks up the new chat activity
+from the same local Codex session store that this stdio app-server writes.
+
 While the foreground router is attached to an interactive terminal, it exposes
 small runtime commands:
 
@@ -102,8 +107,8 @@ codex-github-router --json webhooks reload
 codex-github-router --json request get /user
 ```
 
-- `doctor` checks local prerequisites, GitHub CLI auth, config paths, and setup
-  state.
+- `doctor` checks local prerequisites, GitHub CLI auth, config paths, setup
+  state, and the selected stdio Codex app-server command.
 - `settings show` prints sanitized local router settings.
 - `webhooks reload` re-reads remembered settings and reports whether reload can
   run with the current setup.

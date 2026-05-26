@@ -13,9 +13,8 @@ const DEFAULT_CODEX_APP_BUNDLED_APP_SERVER_BIN = "/Applications/Codex.app/Conten
 const FALLBACK_CODEX_APP_SERVER_BIN = "codex";
 const DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_SESSION_SCAN_DAYS = 14;
-const CODEX_APP_SERVER_CONTROL_SOCKET_ENV = "CODEX_APP_SERVER_CONTROL_SOCKET";
-const CODEX_APP_SERVER_STDIO_MODE = "listen";
-const CODEX_APP_SERVER_PROXY_MODE = "proxy";
+const CODEX_APP_SERVER_STDIO_ARGS = ["app-server", "--listen", "stdio://"] as const;
+const activeCodexThreadDeliveries = new Map<string, Promise<void>>();
 
 type ExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 type AppServerProcess = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -56,37 +55,60 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
   const execFile = options.execFile ?? defaultExecFile;
   const thread = await findCodexThread(event, options, execFile);
   if (!thread.threadId) {
-    return { delivered: false, reason: thread.reason ?? "no matching Codex thread found" };
+    return {
+      delivered: false,
+      reason: thread.reason ?? "no matching Codex thread found",
+    };
   }
+  const threadId = thread.threadId;
 
   const notification = buildCodexInboxNotification(event);
   const codexBin = resolveCodexAppServerBin(options.env);
-  const appServerTransportArgs = resolveAppServerTransportArgs(options.env);
   const codexVersion = options.spawnProcess ? null : await codexAppServerVersion(codexBin, execFile);
   let turn: CodexTurnResult;
   try {
-    turn = await startCodexTurn({
-      appServerTransportArgs,
+    turn = await runWithCodexThreadDeliveryLock(threadId, () => startCodexTurn({
       codexBin,
       codexVersion,
       env: options.env,
       log: options.appServerLog,
       message: notification.description,
       spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
-      threadId: thread.threadId,
-    });
+      threadId,
+    }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`thread ${thread.threadId}: ${message}`);
+    throw new Error(`thread ${threadId}: ${message}`);
   }
+
   return {
     delivered: true,
-    threadId: thread.threadId,
+    threadId,
     turnId: turn.turnId,
     ...(turn.agentMessage ? { agentMessage: turn.agentMessage } : {}),
     appServerBin: codexBin,
     ...(codexVersion ? { appServerVersion: codexVersion } : {}),
   };
+}
+
+async function runWithCodexThreadDeliveryLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = activeCodexThreadDeliveries.get(threadId) ?? Promise.resolve();
+  let releaseCurrent: () => void = () => {};
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const next = previous.catch(() => undefined).then(() => current);
+  activeCodexThreadDeliveries.set(threadId, next);
+
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    releaseCurrent();
+    if (activeCodexThreadDeliveries.get(threadId) === next) {
+      activeCodexThreadDeliveries.delete(threadId);
+    }
+  }
 }
 
 export function buildCodexInboxNotification(event: CodexInboxEvent): { title: string; description: string } {
@@ -359,7 +381,6 @@ function codexSessionsRoot(env: NodeJS.ProcessEnv): string {
 }
 
 function startCodexTurn({
-  appServerTransportArgs,
   codexBin,
   codexVersion,
   env,
@@ -368,7 +389,6 @@ function startCodexTurn({
   spawnProcess,
   threadId,
 }: {
-  appServerTransportArgs: readonly string[];
   codexBin: string;
   codexVersion: string | null;
   env: NodeJS.ProcessEnv;
@@ -377,6 +397,7 @@ function startCodexTurn({
   spawnProcess: SpawnProcess;
   threadId: string;
 }): Promise<CodexTurnResult> {
+  const appServerTransportArgs = CODEX_APP_SERVER_STDIO_ARGS;
   const appServerCommand = `${codexBin} ${appServerTransportArgs.join(" ")}`;
   const appServerLabel = `Codex app-server ${appServerCommand}${codexVersion ? ` (${codexVersion})` : ""}`;
   const timeoutMs = Number(env.CODEX_APP_SERVER_TIMEOUT_MS ?? DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS);
@@ -647,43 +668,7 @@ function resolveCodexAppServerBin(env: NodeJS.ProcessEnv): string {
   return existsSync(bundledAppServerBin) ? bundledAppServerBin : FALLBACK_CODEX_APP_SERVER_BIN;
 }
 
-function resolveAppServerTransportArgs(env: NodeJS.ProcessEnv): readonly string[] {
-  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_STDIO_MODE) {
-    return ["app-server", "--listen", "stdio://"];
-  }
-
-  if (env.CODEX_APP_SERVER_MODE === CODEX_APP_SERVER_PROXY_MODE) {
-    const controlSocket = resolveAppServerControlSocket(env);
-    const args = ["app-server", "proxy"];
-    if (controlSocket) {
-      args.push("--sock", controlSocket);
-    }
-    return args;
-  }
-
-  return ["app-server", "--listen", "stdio://"];
-}
-
-function resolveAppServerControlSocket(env: NodeJS.ProcessEnv): string | null {
-  const configuredSocket = env[CODEX_APP_SERVER_CONTROL_SOCKET_ENV];
-  if (configuredSocket) {
-    return existsSync(configuredSocket) ? configuredSocket : null;
-  }
-
-  const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().uid;
-  const defaultControlSocket = path.join(os.tmpdir(), "codex-ipc", `ipc-${uid}.sock`);
-  return existsSync(defaultControlSocket) ? defaultControlSocket : null;
-}
-
-function appServerTransportMessage(appServerTransportArgs: readonly string[]): string {
-  if (appServerTransportArgs[1] === CODEX_APP_SERVER_PROXY_MODE) {
-    const socketIndex = appServerTransportArgs.indexOf("--sock");
-    const socketPath = socketIndex >= 0 ? appServerTransportArgs[socketIndex + 1] : undefined;
-    return socketPath
-      ? `opened app-server transport: Unix socket control socket ${socketPath}`
-      : "opened app-server transport: default Unix socket control socket";
-  }
-
+function appServerTransportMessage(_appServerTransportArgs: readonly string[]): string {
   return "opened app-server transport: stdio";
 }
 

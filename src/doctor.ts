@@ -1,8 +1,11 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import { cacheDir, configDir, readConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
+const DEFAULT_CODEX_APP_BUNDLED_APP_SERVER_BIN = "/Applications/Codex.app/Contents/Resources/codex";
+const FALLBACK_CODEX_APP_SERVER_BIN = "codex";
 
 async function commandVersion(command: string, args: string[] = ["--version"], env: NodeJS.ProcessEnv = process.env): Promise<{ available: boolean; detail: string }> {
   try {
@@ -24,11 +27,12 @@ async function ghAuthStatus(env: NodeJS.ProcessEnv = process.env): Promise<{ aut
 }
 
 export async function doctor({ env = process.env }: { env?: NodeJS.ProcessEnv } = {}) {
+  const appServerBin = resolveCodexAppServerBin(env);
   const [node, gh, git, codex, ngrok, auth] = await Promise.all([
     commandVersion(process.execPath, ["--version"], env),
     commandVersion("gh", ["--version"], env),
     commandVersion("git", ["--version"], env),
-    commandVersion("codex", ["--version"], env),
+    commandVersion(appServerBin, ["--version"], env),
     commandVersion("ngrok", ["version"], env),
     ghAuthStatus(env),
   ]);
@@ -42,6 +46,11 @@ export async function doctor({ env = process.env }: { env?: NodeJS.ProcessEnv } 
       cacheDir: cacheDir({ env }),
     },
     tools: { node, gh, git, codex, ngrok },
+    appServer: {
+      binary: appServerBin,
+      transport: "stdio",
+      command: `${appServerBin} app-server --listen stdio://`,
+    },
     auth,
     config: {
       present: Boolean(config),
@@ -49,6 +58,14 @@ export async function doctor({ env = process.env }: { env?: NodeJS.ProcessEnv } 
     },
     secrets: credentialStoreStatus(process.platform),
   };
+}
+
+function resolveCodexAppServerBin(env: NodeJS.ProcessEnv): string {
+  if (env.CODEX_APP_SERVER_BIN) {
+    return env.CODEX_APP_SERVER_BIN;
+  }
+  const bundledAppServerBin = env.CODEX_APP_BUNDLED_APP_SERVER_BIN ?? DEFAULT_CODEX_APP_BUNDLED_APP_SERVER_BIN;
+  return existsSync(bundledAppServerBin) ? bundledAppServerBin : FALLBACK_CODEX_APP_SERVER_BIN;
 }
 
 export async function preflightStartup({

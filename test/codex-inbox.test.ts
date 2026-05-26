@@ -51,6 +51,10 @@ async function writeAppServerResponses(child: ReturnType<typeof createAppServerP
   child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`);
 }
 
+async function waitOneTick(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 async function writeAppServerResponsesWithAgentMessage(child: ReturnType<typeof createAppServerProcess>, threadId: string, turnId: string): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
@@ -198,6 +202,56 @@ test("delivers to explicit router Codex thread ID when available", async () => {
   assert.doesNotMatch(child.stdinLines[3] ?? "", /text_elements/);
 });
 
+test("serializes concurrent deliveries to the same Codex thread", async () => {
+  const children: Array<ReturnType<typeof createAppServerProcess>> = [];
+  const deliveryOptions = {
+    cwd: "/repo",
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
+    execFile: async () => ({ stdout: "", stderr: "" }),
+    spawnProcess: () => {
+      const child = createAppServerProcess();
+      children.push(child);
+      return child;
+    },
+  };
+  const firstDelivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "first" },
+    },
+  }, deliveryOptions);
+  const secondDelivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-2",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "second" },
+    },
+  }, deliveryOptions);
+
+  await waitOneTick();
+  const spawnedBeforeFirstCompletion = children.length;
+  if (spawnedBeforeFirstCompletion !== 1) {
+    await Promise.all(children.map((child, index) => writeAppServerResponses(child, "thread-123", `turn-${index + 1}`)));
+    await Promise.allSettled([firstDelivery, secondDelivery]);
+  }
+  assert.equal(spawnedBeforeFirstCompletion, 1);
+
+  await writeAppServerResponses(children[0]!, "thread-123", "turn-1");
+  assert.equal((await firstDelivery).turnId, "turn-1");
+
+  await waitOneTick();
+  assert.equal(children.length, 2);
+
+  await writeAppServerResponses(children[1]!, "thread-123", "turn-2");
+  assert.equal((await secondDelivery).turnId, "turn-2");
+});
+
+
 test("logs app-server protocol interactions without message bodies", async () => {
   const child = createAppServerProcess();
   const logs: string[] = [];
@@ -300,7 +354,7 @@ test("prefers the Codex app-server binary when it exists", async () => {
   assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
 });
 
-test("defaults to stdio transport when the app-server control socket is available", async () => {
+test("always uses stdio transport when the app-server control socket is available", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
   const controlSocket = path.join(home, "codex-ipc", "ipc-test.sock");
   await mkdir(path.dirname(controlSocket), { recursive: true });
@@ -341,42 +395,7 @@ test("defaults to stdio transport when the app-server control socket is availabl
   assert.match(logs.join("\n"), /\[codex-app-server\] opened app-server transport: stdio/);
 });
 
-test("can explicitly request stdio transport mode", async () => {
-  const calls: Array<{ file: string; args: readonly string[] }> = [];
-  const child = createAppServerProcess();
-  const delivery = deliverToCodexInbox({
-    event: "issue_comment",
-    deliveryId: "delivery-1",
-    route: { kind: "organization", name: "patinaproject" },
-    payload: {
-      repository: { full_name: "patinaproject/codex-github-router" },
-      comment: { body: "hello" },
-    },
-  }, {
-    cwd: "/repo",
-    env: envWithoutAppServerControlSocket({
-      CODEX_APP_SERVER_BIN: "codex",
-      CODEX_APP_SERVER_MODE: "listen",
-      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
-      HOME: "/home/test",
-    }),
-    execFile: async (file, args) => {
-      calls.push({ file, args });
-      return { stdout: "", stderr: "" };
-    },
-    spawnProcess: (file, args) => {
-      calls.push({ file, args });
-      return child;
-    },
-  });
-  await writeAppServerResponses(child, "thread-123", "turn-123");
-  await delivery;
-
-  assert.equal(calls[0]?.file, "codex");
-  assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
-});
-
-test("passes a configured app-server control socket to proxy mode", async () => {
+test("ignores proxy mode configuration and still uses stdio", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
   const controlSocket = path.join(home, "codex-ipc", "ipc-test.sock");
   await mkdir(path.dirname(controlSocket), { recursive: true });
@@ -412,7 +431,7 @@ test("passes a configured app-server control socket to proxy mode", async () => 
   await writeAppServerResponses(child, "thread-123", "turn-123");
   await delivery;
 
-  assert.deepEqual(calls[0]?.args, ["app-server", "proxy", "--sock", controlSocket]);
+  assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "stdio://"]);
 });
 
 test("ignores ambient Codex thread ID when launched from Codex", async () => {
@@ -803,5 +822,8 @@ test("reports an undelivered event when no Codex thread matches", async () => {
     },
   });
 
-  assert.deepEqual(result, { delivered: false, reason: "no matching Codex thread found" });
+  assert.deepEqual(result, {
+    delivered: false,
+    reason: "no matching Codex thread found",
+  });
 });

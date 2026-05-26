@@ -124,7 +124,7 @@ async function runStart(options: RouterOptions, context: RuntimeContext): Promis
           const appServer = result.appServerVersion
             ? `${result.appServerBin ?? "unknown"} (${result.appServerVersion})`
             : result.appServerBin ?? "unknown";
-          context.stderr.write(`Completed Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"} using ${appServer}.\n`);
+          context.stderr.write(`Completed Codex turn ${result.turnId ?? "unknown"} in thread ${result.threadId} for ${event} delivery ${deliveryId ?? "unknown"} using ${appServer} via stdio app-server.\n`);
           if (result.agentMessage) {
             context.stderr.write(`Codex response: ${result.agentMessage}\n`);
           }

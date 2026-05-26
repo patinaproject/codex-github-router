@@ -66,3 +66,31 @@ test("doctor reports setup still required for incomplete config", async () => {
     setupRequired: true,
   });
 });
+
+test("doctor reports the single stdio app-server path", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "router-home-"));
+  const binDir = await mkdtemp(path.join(os.tmpdir(), "router-bin-"));
+  await Promise.all([
+    writeStubCommand(binDir, "gh"),
+    writeStubCommand(binDir, "git"),
+    writeStubCommand(binDir, "ngrok"),
+    (async () => {
+      const file = path.join(binDir, "codex");
+      await writeFile(file, "#!/bin/sh\necho codex-cli test\n");
+      await chmod(file, 0o755);
+    })(),
+  ]);
+
+  const result = await doctor({
+    env: {
+      CODEX_APP_SERVER_BIN: path.join(binDir, "codex"),
+      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123",
+      HOME: home,
+      PATH: binDir,
+    },
+  });
+
+  assert.equal(result.appServer.binary, path.join(binDir, "codex"));
+  assert.equal(result.appServer.transport, "stdio");
+  assert.equal(result.appServer.command, `${path.join(binDir, "codex")} app-server --listen stdio://`);
+});
