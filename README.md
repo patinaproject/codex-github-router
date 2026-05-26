@@ -26,6 +26,25 @@ Run the router as a foreground CLI:
 npx codex-github-router
 ```
 
+The CLI opens with the same terminal intro it uses during startup:
+
+```text
+               C Y B E R P U N K    E V E N T    R O U T I N G    A C T I O N
+                  __                   _ __  __          __                        __
+  _________  ____/ /__  _  __   ____ _(_) /_/ /_  __  __/ /_     _________  __  __/ /____  _____
+ / ___/ __ \/ __  / _ \| |/_/  / __ `/ / __/ __ \/ / / / __ \   / ___/ __ \/ / / / __/ _ \/ ___/
+/ /__/ /_/ / /_/ /  __/>  <   / /_/ / / /_/ / / / /_/ / /_/ /  / /  / /_/ / /_/ / /_/  __/ /
+\___/\____/\__,_/\___/_/|_|   \__, /_/\__/_/ /_/\__,_/_.___/  /_/   \____/\__,_/\__/\___/_/
+                             /____/
+
+codex-github-router ready
+local  http://localhost:3000/webhook
+public https://router.example.com/webhook
+hook   https://github.com/organizations/patinaproject/settings/hooks/123
+
+[R] Reload webhooks  [S] Settings  [Q] Quit
+```
+
 The default mode starts a local listener and a managed ngrok tunnel.
 Pull request comments and reviews are routed to the local Codex session whose
 GitHub repository and PR head branch match the incoming activity.
@@ -39,7 +58,7 @@ While the foreground router is attached to an interactive terminal, it exposes
 small runtime commands:
 
 ```text
-[R] Reload webhooks  [S] Show settings  [Q] Quit
+[R] Reload webhooks  [S] Settings  [Q] Quit
 ```
 
 Runtime output never prints webhook secrets.
