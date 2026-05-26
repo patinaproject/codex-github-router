@@ -81,6 +81,11 @@ async function writeFailedAppServerTurn(child: ReturnType<typeof createAppServer
   child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "failed" } } })}\n`);
 }
 
+async function writeAppServerAuthFailure(child: ReturnType<typeof createAppServerProcess>): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  child.stderr.write("2026-05-26T05:15:59.076122Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Auth(TokenRefreshFailed(\"Server returned error response: invalid_grant: Invalid refresh token\"))\n");
+}
+
 async function writeActiveTurnQueueResponses(child: ReturnType<typeof createAppServerProcess>, threadId: string): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
@@ -498,6 +503,28 @@ test("rejects a started Codex turn that later fails", async () => {
   await writeFailedAppServerTurn(child, "thread-123", "turn-123");
 
   await assert.rejects(delivery, /thread thread-123: Codex app-server codex app-server --listen stdio:\/\/ turn turn-123 completed with status failed/u);
+});
+
+test("reports stale Codex app-server refresh tokens as an auth failure", async () => {
+  const child = createAppServerProcess();
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-1",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "hello" },
+    },
+  }, {
+    cwd: "/repo",
+    env: envWithoutAppServerControlSocket({ CODEX_APP_SERVER_BIN: "codex", HOME: "/home/test", CODEX_GITHUB_ROUTER_THREAD_ID: "thread-123" }),
+    execFile: async () => ({ stdout: "", stderr: "" }),
+    spawnProcess: () => child,
+  });
+  await writeAppServerAuthFailure(child);
+
+  await assert.rejects(delivery, /thread thread-123: Codex app-server authentication failed: refresh token is invalid or expired. Sign in to Codex again, then retry./u);
+  assert.deepEqual(child.killedSignals, ["SIGTERM"]);
 });
 
 test("queues delivery until an active Codex turn completes", async () => {

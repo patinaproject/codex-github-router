@@ -479,7 +479,7 @@ function startCodexTurn({
     });
     child.once("exit", (code) => {
       if (!settled) {
-        rejectOnce(new Error(`${appServerLabel} exited before starting a turn with code ${code ?? "unknown"}${stderrBuffer ? `: ${excerpt(stderrBuffer)}` : ""}`));
+        rejectOnce(appServerExitError({ appServerLabel, code, stderr: stderrBuffer }));
       }
     });
     child.stdout.on("data", (chunk: Buffer) => {
@@ -492,6 +492,9 @@ function startCodexTurn({
       const stderr = chunk.toString("utf8");
       stderrBuffer = `${stderrBuffer}${stderr}`;
       logAppServer(log, `stderr: ${excerpt(stderr)}`);
+      if (isCodexAppServerAuthFailure(stderrBuffer)) {
+        rejectOnce(codexAppServerAuthError());
+      }
     });
 
     function takeJsonMessages(): string[] {
@@ -697,6 +700,21 @@ function turnErrorDetails(turn: Record<string, unknown> | undefined): string {
     return "";
   }
   return `: ${excerpt(JSON.stringify(error))}`;
+}
+
+function appServerExitError({ appServerLabel, code, stderr }: { appServerLabel: string; code: number | null; stderr: string }): Error {
+  if (isCodexAppServerAuthFailure(stderr)) {
+    return codexAppServerAuthError();
+  }
+  return new Error(`${appServerLabel} exited before starting a turn with code ${code ?? "unknown"}${stderr ? `: ${excerpt(stderr)}` : ""}`);
+}
+
+function isCodexAppServerAuthFailure(stderr: string): boolean {
+  return /TokenRefreshFailed|invalid_grant|Invalid refresh token/iu.test(stderr);
+}
+
+function codexAppServerAuthError(): Error {
+  return new Error("Codex app-server authentication failed: refresh token is invalid or expired. Sign in to Codex again, then retry.");
 }
 
 function logAppServer(log: ((message: string) => void) | undefined, message: string): void {
