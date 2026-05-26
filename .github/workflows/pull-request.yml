@@ -53,31 +53,96 @@ jobs:
           ignoreLabels: |
             dependencies
 
-      - name: Check for closing keyword in PR body
+      - name: Check for linked issue in PR body
         if: "${{ github.event.pull_request.user.login != 'dependabot[bot]' }}"
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           if [ -z "$PR_BODY" ]; then
-            echo "::error::PR body is empty. Add a GitHub closing keyword such as 'Closes #<issue>'."
+            echo "::error::PR body is empty. Add a GitHub issue link such as 'Closes #<issue>' or 'Related to #<issue>'."
             exit 1
           fi
-          # Strip HTML comments, fenced code blocks, inline code, strikethrough, blockquotes.
-          BT=$(printf '\x60')
-          # shellcheck disable=SC2016
+
+          # Strip HTML comments, fenced code blocks, inline code, strikethrough,
+          # blockquotes, and indented code blocks.
           sanitized=$(printf '%s' "$PR_BODY" \
-            | sed -E 's/<!--([^-]|-[^-])*-->//g' \
-            | awk -v bt="$BT" 'BEGIN{fence=bt bt bt} $0 ~ "^" fence {toggle=!toggle; next} !toggle' \
-            | sed -E "s/${BT}[^${BT}]*${BT}//g" \
+            | awk '
+                function fence_marker(line, closing,    indent, body, char, i, suffix) {
+                  match(line, /^ */)
+                  indent = RLENGTH
+                  if (indent > 3 || substr(line, indent + 1, 1) == "\t") {
+                    return ""
+                  }
+                  body = substr(line, indent + 1)
+                  char = substr(body, 1, 1)
+                  if (char != "`" && char != "~") {
+                    return ""
+                  }
+                  for (i = 1; i <= length(body) && substr(body, i, 1) == char; i++) {
+                  }
+                  if (i - 1 < 3) {
+                    return ""
+                  }
+                  suffix = substr(body, i)
+                  if (closing && suffix !~ /^[[:space:]]*$/) {
+                    return ""
+                  }
+                  return char ":" i - 1
+                }
+                active_char != "" {
+                  marker = fence_marker($0, 1)
+                  split(marker, parts, ":")
+                  if (parts[1] == active_char && parts[2] >= active_len) {
+                    active_char = ""
+                    active_len = 0
+                  }
+                  next
+                }
+                {
+                  marker = fence_marker($0, 0)
+                  split(marker, parts, ":")
+                  if (parts[2] >= 3) {
+                    active_char = parts[1]
+                    active_len = parts[2]
+                    next
+                  }
+                  print
+                }
+              ' \
+            | perl -0pe 's/<!--.*?-->//gs' \
+            | perl -0pe 's/(`+)(?:(?!\1).)*\1//gs' \
             | sed -E 's/~~[^~]*~~//g')
-          sanitized=$(printf '%s' "$sanitized" | grep -vE '^[[:space:]]*>' || true)
-          # shellcheck disable=SC2016
-          if printf '%s' "$sanitized" | grep -qiE \
-            '(^|[^A-Za-z])(close[sd]?|fix(e[sd])?|resolve[sd]?)[ \t]+([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[1-9][0-9]*([^0-9A-Za-z_]|$)'; then
-            echo "Closing keyword found."
+          sanitized=$(printf '%s' "$sanitized" \
+            | awk '
+                /^[[:space:]]*>/ {
+                  in_blockquote = 1
+                  next
+                }
+                in_blockquote && NF == 0 {
+                  in_blockquote = 0
+                  print
+                  next
+                }
+                in_blockquote {
+                  next
+                }
+                /^([[:space:]]{4,}|[[:space:]]*\t)/ && $0 !~ /^[[:space:]]{2,}([-+*]|[0-9]+[.)])[[:space:]]+/ {
+                  next
+                }
+                {
+                  print
+                }
+              ' || true)
+
+          issue_ref='([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[1-9][0-9]*'
+          link_phrase='(close[sd]?|fix(e[sd])?|resolve[sd]?|related[[:space:]]+to|blocks|partially[[:space:]]+satisfies)'
+
+          if printf '%s' "$sanitized" | grep -qiE "(^|[^A-Za-z])${link_phrase}:?[[:space:]]+${issue_ref}([^0-9A-Za-z_]|$)"; then
+            echo "Issue link found."
             exit 0
           fi
-          echo "::error::PR body must contain a GitHub closing keyword (e.g. 'Closes #123') outside code blocks, HTML comments, strikethrough, and blockquotes."
+
+          echo "::error::PR body must contain a GitHub issue link (e.g. 'Closes #123' or 'Related to #123') outside code blocks, HTML comments, strikethrough, and blockquotes."
           exit 1
 
       - name: Compare title `!` with breaking-change markers
