@@ -105,8 +105,11 @@ reference and stay within 72 characters.
 
 - Use the same format for PR titles as commit messages so squash merges can
   reuse the title directly.
-- Include a GitHub issue link such as `Closes #123` or `Related to #123` in the
-  PR body. Prefer a closing keyword when the PR completes the issue.
-- Fill out `What changed` and `Verification` in the PR template.
-- Add `Testing steps` only when a human operator needs to verify something
-  manually.
+- Include one `Closes #123`, `Fixes #123`, or `Resolves #123` line for each
+  issue the PR completes. Add non-closing references only as extra context.
+- Fill out `What changed` for a human who has not seen the work: explain what
+  changed and why by purpose, not file by file.
+- Add `Testing steps` only for behavior changes with useful outcome evidence.
+  Each item must pair an action already performed with the result actually
+  observed; never write aspirational checks or mobile/web platform QA matrices.
+  Omit the section when it adds no reviewer value.
