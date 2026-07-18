@@ -6,7 +6,10 @@ repository hygiene and automation.
 ```text
 .
 ├── .claude/
+│   ├── skills/
 │   └── settings.json
+├── .agents/
+│   └── skills/
 ├── .github/
 │   ├── workflows/
 │   │   ├── actions.yml
@@ -29,10 +32,13 @@ repository hygiene and automation.
 ├── LICENSE
 ├── README.md
 ├── SECURITY.md
+├── scripts/
+│   └── install-third-party-skills.sh
 ├── commitizen.config.json
 ├── commitlint.config.js
 ├── package.json
-└── pnpm-lock.yaml
+├── pnpm-lock.yaml
+└── skills-lock.json
 ```
 
 ## Tooling Files
@@ -45,6 +51,8 @@ repository hygiene and automation.
 | `.husky/pre-commit` | Runs lint-staged before commits |
 | `.markdownlint.jsonc` | Markdownlint configuration |
 | `.markdownlintignore` | Markdownlint exclusions |
+| `skills-lock.json` | Locked project-local skill catalog and upstream paths |
+| `.agents/skills/**`, `.claude/skills/**` | Committed generated skill overlays |
 
 ## Agent Guidance
 

@@ -9,11 +9,18 @@ This repository routes GitHub events to Codex.
 - `.github/workflows/`: pull request, markdown, and workflow lint checks.
 - `.github/pull_request_template.md`: required PR body structure.
 - `.claude/settings.json`: local Claude Code plugin configuration.
+- `.agents/skills/<name>/`, `.claude/skills/<name>`: committed skill overlays.
+- `skills-lock.json`: project-local skill catalog and upstream source paths.
 - `package.json`: repository tooling for commitlint, commitizen, husky, and markdownlint.
 
 ## Commands
 
 - `pnpm install`: install tooling and wire Husky hooks.
+- `pnpm skills:update`: refresh every valid locked skill from its upstream
+  default branch and update `skills-lock.json`.
+- `pnpm skills:restore`: regenerate the committed `.agents/skills/**` and
+  `.claude/skills/**` overlays from `skills-lock.json`.
+- `pnpm test`: run the router tests and pull request body contract test.
 - `pnpm lint:md`: lint Markdown files.
 - `pnpm exec commitlint --edit <commit-message-file>`: validate one commit message.
 - `pnpm commit`: open the commitizen prompt for a convention-compliant commit.
@@ -27,6 +34,9 @@ This repository routes GitHub events to Codex.
   truth before applying issue or PR labels.
 - Store durable product, design, and implementation context in GitHub issues
   and pull requests, not in throwaway local planning files.
+- Keep `skills-lock.json`, `.agents/skills/**`, and `.claude/skills/**` in sync.
+  For catalog maintenance, run `pnpm skills:update`, resolve any retired names,
+  then run `pnpm skills:restore` and commit the regenerated overlays.
 
 ## Commit Type Selection
 
