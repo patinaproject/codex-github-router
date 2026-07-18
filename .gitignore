@@ -1,10 +1,8 @@
 node_modules/
 
-# Project-local agent skills installed by external tooling stay local unless
-# this repository intentionally starts owning first-party skills.
-skills/
-.agents/skills/
-.claude/skills/
+# Project-local skills outside the locked catalog stay local. The committed
+# `.agents/skills/` and `.claude/skills/` overlays are owned by this repository.
+/skills/
 
 dist/
 build/
