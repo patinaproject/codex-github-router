@@ -4,6 +4,8 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
+import { deliverWithTimeoutRetry } from "./codex-delivery-attempt.js";
+import type { CodexTurnResult, DeliveryAttemptPhase, DeliveryAttemptResult } from "./codex-delivery-attempt.js";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 
@@ -67,14 +69,19 @@ export async function deliverToCodexInbox(event: CodexInboxEvent, options: Codex
   const codexVersion = options.spawnProcess ? null : await codexAppServerVersion(codexBin, execFile);
   let turn: CodexTurnResult;
   try {
-    turn = await runWithCodexThreadDeliveryLock(threadId, () => startCodexTurn({
-      codexBin,
-      codexVersion,
+    turn = await runWithCodexThreadDeliveryLock(threadId, () => deliverWithTimeoutRetry({
       env: options.env,
-      log: options.appServerLog,
-      message: notification.description,
-      spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
+      log: (message) => logAppServer(options.appServerLog, message),
       threadId,
+      attempt: () => startCodexTurn({
+        codexBin,
+        codexVersion,
+        env: options.env,
+        log: options.appServerLog,
+        message: notification.description,
+        spawnProcess: options.spawnProcess ?? defaultSpawnProcess,
+        threadId,
+      }),
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -205,11 +212,6 @@ interface CodexSession {
 interface CodexGitSession extends CodexSession {
   repo: string;
   branch: string;
-}
-
-interface CodexTurnResult {
-  turnId: string;
-  agentMessage?: string | undefined;
 }
 
 async function recentCodexSessions(env: NodeJS.ProcessEnv): Promise<CodexSession[]> {
@@ -396,7 +398,7 @@ function startCodexTurn({
   message: string;
   spawnProcess: SpawnProcess;
   threadId: string;
-}): Promise<CodexTurnResult> {
+}): Promise<DeliveryAttemptResult> {
   const appServerTransportArgs = CODEX_APP_SERVER_STDIO_ARGS;
   const appServerCommand = `${codexBin} ${appServerTransportArgs.join(" ")}`;
   const appServerLabel = `Codex app-server ${appServerCommand}${codexVersion ? ` (${codexVersion})` : ""}`;
@@ -404,6 +406,7 @@ function startCodexTurn({
   logAppServer(log, `using ${codexBin}${codexVersion ? ` (${codexVersion})` : ""}`);
   logAppServer(log, appServerTransportMessage(appServerTransportArgs));
   logAppServer(log, `spawn ${appServerCommand}`);
+  let phase: DeliveryAttemptPhase = "spawning";
   const child = spawnProcess(codexBin, appServerTransportArgs, {
     env: codexAppServerEnv(env),
     stdio: ["pipe", "pipe", "pipe"],
@@ -414,7 +417,6 @@ function startCodexTurn({
   let resumed = false;
   let settled = false;
   let compacting = false;
-  let waitingForActiveTurn = false;
   let retriedAfterCompaction = false;
   let turnId: string | null = null;
   let agentMessage = "";
@@ -434,7 +436,7 @@ function startCodexTurn({
   }
 
   function requestTurnStart(): void {
-    waitingForActiveTurn = false;
+    phase = "starting";
     request("turn/start", {
       threadId,
       input: [{
@@ -451,8 +453,7 @@ function startCodexTurn({
       }
       settled = true;
       clearTimeout(timeout);
-      child.stdin.end();
-      child.kill("SIGTERM");
+      shutdown();
       reject(error);
     }
 
@@ -462,7 +463,8 @@ function startCodexTurn({
       }
       settled = true;
       clearTimeout(timeout);
-      resolve(result);
+      shutdown();
+      resolve({ status: "completed", turn: result });
     }
 
     function shutdown(): void {
@@ -471,7 +473,16 @@ function startCodexTurn({
     }
 
     const timeout = setTimeout(() => {
-      rejectOnce(new Error(`Timed out waiting for ${appServerLabel} turn completion after ${timeoutMs}ms`));
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const outcome: DeliveryAttemptResult = {
+        status: "timed-out",
+        phase,
+        error: new Error(`Timed out waiting for ${appServerLabel} turn completion after ${timeoutMs}ms`),
+      };
+      terminateTimedOutAppServer(child).then(() => resolve(outcome), reject);
     }, timeoutMs);
 
     child.once("error", (error) => {
@@ -534,6 +545,9 @@ function startCodexTurn({
     }
 
     function handleMessageBody(body: string): void {
+      if (settled) {
+        return;
+      }
       let messageJson: Record<string, unknown>;
       try {
         messageJson = JSON.parse(body) as Record<string, unknown>;
@@ -560,6 +574,7 @@ function startCodexTurn({
 
       if (responseMethod === "initialize") {
         notify("initialized");
+        phase = "resuming";
         request("thread/resume", { threadId, excludeTurns: true });
         return;
       }
@@ -570,7 +585,7 @@ function startCodexTurn({
         resumed = true;
         const status = objectField(thread, "status");
         if (stringField(status, "type") === "active") {
-          waitingForActiveTurn = true;
+          phase = "queued";
           logAppServer(log, `thread ${threadId} is active; queueing delivery until the active turn completes`);
           return;
         }
@@ -602,6 +617,7 @@ function startCodexTurn({
       const startedTurnId = stringField(turn, "id");
       if (startedTurnId && !turnId) {
         turnId = startedTurnId;
+        phase = "waiting";
         logAppServer(log, `turn started ${startedTurnId}`);
         return;
       }
@@ -612,7 +628,7 @@ function startCodexTurn({
           const completedTurn = objectField(params, "turn");
           const completedTurnId = stringField(completedTurn, "id") ?? turnId;
           const status = stringField(completedTurn, "status") ?? "unknown";
-          if (waitingForActiveTurn && !turnId) {
+          if (phase === "queued" && !turnId) {
             logAppServer(log, `active turn completed ${completedTurnId ?? "unknown"} status=${status}; starting queued delivery`);
             requestTurnStart();
             return;
@@ -621,10 +637,10 @@ function startCodexTurn({
             logAppServer(log, `turn completed ${completedTurnId ?? "unknown"} status=${status}`);
             if (status === "failed" && !retriedAfterCompaction && hasContextWindowExceeded(completedTurn)) {
               compacting = true;
+              phase = "compacting";
               request("thread/compact/start", { threadId });
               return;
             }
-            shutdown();
             if (completedTurnId && status === "completed") {
               const trimmedAgentMessage = agentMessage.trim();
               if (trimmedAgentMessage) {
@@ -642,6 +658,7 @@ function startCodexTurn({
       }
     }
 
+    phase = "initializing";
     request("initialize", {
       clientInfo: {
         name: "codex-github-router",
@@ -659,6 +676,22 @@ function startCodexTurn({
         ],
       },
     });
+  });
+}
+
+async function terminateTimedOutAppServer(child: AppServerProcess): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const forceKill = setTimeout(() => child.kill("SIGKILL"), 1000);
+    child.once("exit", () => {
+      clearTimeout(forceKill);
+      resolve();
+    });
+    child.once("error", (error) => {
+      clearTimeout(forceKill);
+      reject(error);
+    });
+    child.stdin.end();
+    child.kill("SIGTERM");
   });
 }
 
