@@ -35,6 +35,7 @@ function createAppServerProcess(): ChildProcessByStdio<Writable, Readable, Reada
       stdout.end();
       stderr.end();
       stdin.end();
+      child.emit("exit", null, signal);
       return true;
   };
   return child;
@@ -53,6 +54,242 @@ async function writeAppServerResponses(child: ReturnType<typeof createAppServerP
 
 async function waitOneTick(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+function timeoutDelivery(env: NodeJS.ProcessEnv = {}) {
+  const children: ReturnType<typeof createAppServerProcess>[] = [];
+  const logs: string[] = [];
+  const delivery = deliverToCodexInbox({
+    event: "issue_comment",
+    deliveryId: "delivery-timeout",
+    route: { kind: "organization", name: "patinaproject" },
+    payload: {
+      repository: { full_name: "patinaproject/codex-github-router" },
+      comment: { body: "sensitive retry comment body" },
+    },
+  }, {
+    cwd: "/repo",
+    env: {
+      CODEX_APP_SERVER_BIN: "codex",
+      CODEX_GITHUB_ROUTER_THREAD_ID: "thread-timeout",
+      CODEX_APP_SERVER_TIMEOUT_MS: "100",
+      CODEX_APP_SERVER_TIMEOUT_RETRY_DELAY_MS: "0",
+      ...env,
+    },
+    appServerLog: (message) => logs.push(message),
+    spawnProcess: () => {
+      const child = createAppServerProcess();
+      children.push(child);
+      return child;
+    },
+  });
+  return { delivery, children, logs };
+}
+
+async function resumeTimedOutThread(child: ReturnType<typeof createAppServerProcess>, active = false): Promise<void> {
+  await waitOneTick();
+  child.stdout.write(`${JSON.stringify({ id: "1", result: {} })}\n`);
+  child.stdout.write(`${JSON.stringify({ id: "2", result: { thread: {
+    id: "thread-timeout", status: { type: active ? "active" : "idle" },
+  } } })}\n`);
+  if (!active) {
+    child.stdout.write(`${JSON.stringify({ id: "3", result: { turn: { id: "turn-stalled" } } })}\n`);
+  }
+}
+
+test("retries a timed-out delivery with the same thread and input and body-safe logs", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { delivery, children, logs } = timeoutDelivery();
+  const outcome = delivery.then((result) => result, (error: unknown) => error);
+  await waitOneTick();
+  const first = children[0]!;
+  await resumeTimedOutThread(first);
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  assert.equal(children.length, 2, "a timeout spawns one fresh app-server");
+  assert.deepEqual(first.killedSignals, ["SIGTERM"]);
+  const second = children[1]!;
+  await writeAppServerResponsesWithAgentMessage(second, "thread-timeout", "turn-recovered");
+  assert.deepEqual(await outcome, {
+    delivered: true,
+    threadId: "thread-timeout",
+    turnId: "turn-recovered",
+    agentMessage: "Acknowledged. No follow-up needed.",
+    appServerBin: "codex",
+  });
+  assert.deepEqual(second.stdinLines, first.stdinLines, "each attempt repeats the same protocol and notification");
+  assert.deepEqual(second.stdinLines.map((line) => JSON.parse(line).method), [
+    "initialize", "initialized", "thread/resume", "turn/start",
+  ]);
+  assert.match(logs.join("\n"), /retry attempt 2\/2/);
+  assert.match(logs.join("\n"), /attempt 2\/2 completed/);
+  assert.doesNotMatch(logs.join("\n"), /sensitive retry comment body/);
+});
+
+for (const active of [false, true]) {
+  test(`stops after the retry times out ${active ? "behind an active turn" : "waiting for completion"}`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const { delivery, children, logs } = timeoutDelivery();
+    const rejected = assert.rejects(delivery, (error: Error) => {
+      assert.match(error.message, /thread thread-timeout: Timed out waiting for Codex app-server codex app-server --listen stdio:\/\/ turn completion after 100ms/);
+      assert.match(error.message, /timeout attempts exhausted \(2\/2\)/);
+      assert.match(error.message, active ? /thread remained active/ : /phase=waiting/);
+      return true;
+    });
+    await waitOneTick();
+    await resumeTimedOutThread(children[0]!, active);
+    t.mock.timers.tick(100);
+    await waitOneTick();
+    await resumeTimedOutThread(children[1]!, active);
+    t.mock.timers.tick(100);
+    await rejected;
+    assert.equal(children.length, 2, "exhausted retries cannot spawn another app-server");
+    assert.ok(children.every((child) => child.killedSignals.join() === "SIGTERM"));
+    assert.match(logs.join("\n"), /attempt 2\/2 timed out/);
+    assert.doesNotMatch(logs.join("\n"), /sensitive retry comment body/);
+    if (active) {
+      assert.ok(children.every((child) => child.stdinLines.length === 3), "a stuck active thread never receives turn/start");
+    }
+  });
+}
+
+test("retries after timing out behind an active turn", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { delivery, children } = timeoutDelivery();
+  await waitOneTick();
+  await resumeTimedOutThread(children[0]!, true);
+  assert.equal(children[0]!.stdinLines.length, 3);
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  await writeAppServerResponses(children[1]!, "thread-timeout", "turn-recovered");
+  assert.equal((await delivery).turnId, "turn-recovered");
+  assert.equal(children.length, 2);
+});
+
+test("waits for the timed-out child's exit and configured delay before retrying", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { delivery, children } = timeoutDelivery({ CODEX_APP_SERVER_TIMEOUT_RETRY_DELAY_MS: "25" });
+  await waitOneTick();
+  const first = children[0]!;
+  first.kill = (signal) => {
+    first.killedSignals.push(String(signal));
+    return true;
+  };
+  await resumeTimedOutThread(first);
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  assert.deepEqual(first.killedSignals, ["SIGTERM"]);
+  assert.equal(children.length, 1, "sending SIGTERM alone does not allow the next attempt");
+  first.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {
+    threadId: "thread-timeout", turn: { id: "turn-stalled", status: "completed" },
+  } })}\n`);
+  first.emit("exit", null, "SIGTERM");
+  await waitOneTick();
+  t.mock.timers.tick(24);
+  await waitOneTick();
+  assert.equal(children.length, 1, "the retry delay begins after process exit");
+  t.mock.timers.tick(1);
+  await waitOneTick();
+  assert.equal(children.length, 2);
+  await writeAppServerResponses(children[1]!, "thread-timeout", "turn-recovered");
+  assert.equal((await delivery).turnId, "turn-recovered", "late completion from a timed-out child cannot settle delivery");
+});
+
+test("kills a timed-out child that ignores SIGTERM before retrying", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { delivery, children } = timeoutDelivery();
+  await waitOneTick();
+  const first = children[0]!;
+  first.kill = (signal) => {
+    first.killedSignals.push(String(signal));
+    if (signal === "SIGKILL") first.emit("exit", null, signal);
+    return true;
+  };
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  assert.equal(children.length, 1);
+  t.mock.timers.tick(1000);
+  await waitOneTick();
+  assert.deepEqual(first.killedSignals, ["SIGTERM", "SIGKILL"]);
+  await writeAppServerResponses(children[1]!, "thread-timeout", "turn-recovered");
+  assert.equal((await delivery).turnId, "turn-recovered");
+});
+
+test("zero timeout retries preserves single-attempt failure", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { delivery, children } = timeoutDelivery({ CODEX_APP_SERVER_TIMEOUT_RETRIES: "0" });
+  const rejected = assert.rejects(delivery, /Timed out waiting for Codex app-server.*after 100ms; timeout attempts exhausted \(1\/1\)/);
+  await waitOneTick();
+  t.mock.timers.tick(100);
+  await rejected;
+  assert.equal(children.length, 1);
+  assert.deepEqual(children[0]!.killedSignals, ["SIGTERM"]);
+});
+
+for (const failure of ["authentication", "protocol", "exit", "failed turn"]) {
+  test(`does not retry an app-server ${failure} failure`, async () => {
+    const { delivery, children } = timeoutDelivery();
+    const expected = {
+      authentication: /authentication failed/,
+      protocol: /protocol failed/,
+      exit: /exited before starting a turn with code 1/,
+      "failed turn": /completed with status failed/,
+    }[failure]!;
+    const rejected = assert.rejects(delivery, expected);
+    await waitOneTick();
+    const child = children[0]!;
+    if (failure === "authentication") await writeAppServerAuthFailure(child);
+    if (failure === "protocol") child.stdout.write(`${JSON.stringify({ id: "1", error: { message: "protocol failed" } })}\n`);
+    if (failure === "exit") child.emit("exit", 1);
+    if (failure === "failed turn") await writeFailedAppServerTurn(child, "thread-timeout", "turn-failed");
+    await rejected;
+    assert.equal(children.length, 1);
+  });
+}
+
+test("honors a configured retry count", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { delivery, children } = timeoutDelivery({ CODEX_APP_SERVER_TIMEOUT_RETRIES: "2" });
+  await waitOneTick();
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  assert.equal(children.length, 3);
+  await writeAppServerResponses(children[2]!, "thread-timeout", "turn-recovered");
+  assert.equal((await delivery).turnId, "turn-recovered");
+});
+
+test("holds the thread lock through the default retry delay and recovery", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const first = timeoutDelivery({ CODEX_APP_SERVER_TIMEOUT_RETRY_DELAY_MS: undefined });
+  await waitOneTick();
+  const queued = timeoutDelivery();
+  t.mock.timers.tick(100);
+  await waitOneTick();
+  t.mock.timers.tick(999);
+  await waitOneTick();
+  assert.equal(first.children.length, 1, "the default delay is one second after exit");
+  assert.equal(queued.children.length, 0, "a later delivery cannot overtake the retry");
+  t.mock.timers.tick(1);
+  await waitOneTick();
+  assert.equal(first.children.length, 2);
+  assert.equal(queued.children.length, 0);
+  await writeAppServerResponses(first.children[1]!, "thread-timeout", "turn-recovered");
+  assert.equal((await first.delivery).turnId, "turn-recovered");
+  await waitOneTick();
+  await writeAppServerResponses(queued.children[0]!, "thread-timeout", "turn-next");
+  assert.equal((await queued.delivery).turnId, "turn-next");
+});
+
+for (const name of ["CODEX_APP_SERVER_TIMEOUT_RETRIES", "CODEX_APP_SERVER_TIMEOUT_RETRY_DELAY_MS"]) {
+  for (const value of ["", "-1", "0.5", "NaN", "Infinity", "9007199254740991"]) {
+    test(`rejects invalid ${name}=${JSON.stringify(value)} before spawning`, async () => {
+      const { delivery, children } = timeoutDelivery({ [name]: value });
+      await assert.rejects(delivery, new RegExp(`${name} must be an integer`));
+      assert.equal(children.length, 0);
+    });
+  }
 }
 
 async function writeAppServerResponsesWithAgentMessage(child: ReturnType<typeof createAppServerProcess>, threadId: string, turnId: string): Promise<void> {

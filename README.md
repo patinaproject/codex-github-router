@@ -109,6 +109,30 @@ Replay local webhook requests without touching GitHub webhook settings:
 codex-github-router --localhost
 ```
 
+Codex delivery retries once when the app-server does not report turn completion
+before the timeout, including while queued behind an active turn. The router
+terminates the timed-out app-server, waits for it to exit, then resumes the same
+thread in a fresh process with the same notification. If the process ignores
+SIGTERM for one second, the router sends SIGKILL before waiting for its exit.
+Authentication, protocol, process-exit, and failed-turn errors do not trigger
+timeout retries. Context-window compaction remains a separate recovery within
+each attempt.
+
+Configure delivery timing through environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CODEX_APP_SERVER_TIMEOUT_MS` | `600000` | Timeout for each app-server attempt, including initialization and active-turn queueing |
+| `CODEX_APP_SERVER_TIMEOUT_RETRIES` | `1` | Additional attempts after timeout; `0` disables timeout retry |
+| `CODEX_APP_SERVER_TIMEOUT_RETRY_DELAY_MS` | `1000` | Delay after the timed-out process exits; `0` retries immediately |
+
+Retry count and delay must be nonnegative integers. Invalid values fail delivery
+before spawning an app-server. The maximum retry delay is `2147483647` ms.
+Attempt logs report retries, timeouts, and completion without notification text.
+When retries are exhausted, the delivery warning includes the thread, app-server
+command, attempt count, and whether the thread remained active. GitHub delivery
+deduplication remains unchanged; recovery happens inside the original delivery.
+
 Clear remembered local settings and cache:
 
 ```sh
